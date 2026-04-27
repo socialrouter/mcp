@@ -27,6 +27,13 @@
   "author": "SocialRouter",
   "license": "MIT",
   "homepage": "https://www.socialrouter.io",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/socialrouter/mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/socialrouter/mcp/issues"
+  },
   "publishConfig": {
     "access": "public"
   },
