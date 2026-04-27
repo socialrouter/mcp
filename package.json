@@ -1,0 +1,45 @@
+{
+  "name": "@socialrouter/mcp",
+  "version": "0.1.0",
+  "description": "MCP server for SocialRouter — let LLM agents extract social media data",
+  "main": "dist/index.js",
+  "type": "module",
+  "bin": {
+    "socialrouter-mcp": "dist/index.js"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "tsc && chmod +x dist/index.js",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "socialrouter",
+    "social-media",
+    "llm",
+    "agent",
+    "claude",
+    "linkedin",
+    "instagram"
+  ],
+  "author": "SocialRouter",
+  "license": "MIT",
+  "homepage": "https://www.socialrouter.io",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@socialrouter/sdk": "^0.1.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "typescript": "^6.0.2"
+  }
+}
