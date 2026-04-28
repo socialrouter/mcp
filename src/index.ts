@@ -27,18 +27,17 @@ server.registerTool(
   "extract",
   {
     title: "Extract social data",
-    description: "Extract data from a social media URL (LinkedIn, Instagram, X, Reddit). Pick the extraction type matching the URL kind.",
+    description: "Extract data from a social media URL. The `provider` argument is a service slug of the form provider/platform/type (e.g. 'apify/linkedin/profile.info') — find it on https://www.socialrouter.io/providers.",
     inputSchema: {
       url: z.string().describe("The full URL of the social media content"),
-      type: z
-        .enum(["post.likes", "post.comments", "profile.info", "profile.posts", "profile.followers"])
-        .describe("What to extract from the URL"),
+      provider: z
+        .string()
+        .describe("Service slug of the form provider/platform/type (e.g. 'apify/linkedin/profile.info'). Fully specifies the routing target."),
       limit: z.number().int().positive().optional().describe("Maximum number of results to return (default 100)"),
-      provider: z.string().optional().describe("Optional provider override (e.g. 'lobstr', 'apify'). Omit to let SocialRouter route automatically."),
     },
   },
-  async ({ url, type, limit, provider }) => {
-    const result = await client.extract({ url, type, limit, provider });
+  async ({ url, provider, limit }) => {
+    const result = await client.extract({ url, provider, limit });
     return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
   }
 );

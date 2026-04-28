@@ -30,7 +30,7 @@ Add to `~/.cursor/mcp.json` with the same shape.
 
 | Tool | Description |
 |---|---|
-| `extract` | Extract data from a social media URL. Pick an extraction type matching the URL kind. |
+| `extract` | Extract data from a social media URL. Specify the routing target with a `provider` slug. |
 | `list_providers` | List available data extraction providers and their status. |
 | `get_balance` | Check your SocialRouter credit balance. |
 | `get_extraction` | Retrieve a previous extraction by ID. |
@@ -40,9 +40,8 @@ Add to `~/.cursor/mcp.json` with the same shape.
 | Param | Required | Description |
 |---|---|---|
 | `url` | yes | Full URL of the social media content |
-| `type` | yes | `post.likes`, `post.comments`, `profile.info`, `profile.posts`, or `profile.followers` |
+| `provider` | yes | Service slug `provider/platform/type` (e.g. `apify/linkedin/profile.info`) — copy from [socialrouter.io/providers](https://www.socialrouter.io/providers) |
 | `limit` | no | Max records (default 100) |
-| `provider` | no | Provider override (e.g. `lobstr`, `apify`) — omit to let SocialRouter route automatically |
 
 ## Environment Variables
 
