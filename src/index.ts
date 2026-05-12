@@ -18,7 +18,7 @@ const client = new SocialRouter({
 
 const server = new McpServer({
   name: "socialrouter",
-  version: "0.1.0",
+  version: "0.3.0",
 });
 
 // ─── Tools ───────────────────────────────────────────────
@@ -26,18 +26,91 @@ const server = new McpServer({
 server.registerTool(
   "extract",
   {
-    title: "Extract social data",
-    description: "Extract data from a social media URL. The `provider` argument is a service slug of the form provider/platform/type (e.g. 'apify/linkedin/profile.info') — find it on https://www.socialrouter.io/providers.",
+    title: "Extract social data from URLs",
+    description:
+      "Run a URL-driven extraction. The `provider` argument is a service slug of the form 'provider/platform/type' (e.g. 'apify/linkedin/profile.info'), with an optional ':tag' suffix to select an actor variant (e.g. 'apify/linkedin/profile.posts:apimaestro'). Find available slugs at https://www.socialrouter.io/providers. Pass either `url` (single) or `urls` (batch — only meaningful for batch-capable actors).",
     inputSchema: {
-      url: z.string().describe("The full URL of the social media content"),
+      url: z
+        .string()
+        .optional()
+        .describe("Single social media URL. Mutually exclusive with `urls`."),
+      urls: z
+        .array(z.string())
+        .nonempty()
+        .optional()
+        .describe(
+          "Batch list of social media URLs. Mutually exclusive with `url`. Only effective for batch-capable actors."
+        ),
       provider: z
         .string()
-        .describe("Service slug of the form provider/platform/type (e.g. 'apify/linkedin/profile.info'). Fully specifies the routing target."),
-      limit: z.number().int().positive().optional().describe("Maximum number of results to return (default 100)"),
+        .describe(
+          "Service slug 'provider/platform/type' or 'provider/platform/type:tag' (e.g. 'apify/linkedin/profile.info')."
+        ),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Maximum number of records to return (default 100)."),
+      fallback: z
+        .boolean()
+        .optional()
+        .describe(
+          "Whether to fall over to alternative providers if the requested one fails (default true)."
+        ),
     },
   },
-  async ({ url, provider, limit }) => {
-    const result = await client.extract({ url, provider, limit });
+  async ({ url, urls, provider, limit, fallback }) => {
+    if (!url && !urls) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Error: provide either `url` or `urls`.",
+          },
+        ],
+        isError: true,
+      };
+    }
+    const result = await client.extract({ url, urls, provider, limit, fallback });
+    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "search",
+  {
+    title: "Search via a provider (query-driven)",
+    description:
+      "Run a query-driven search (companion to `extract`). Use this for services where the input is a search term rather than a URL — currently `place.search` on Google Maps. The `provider` slug grammar is identical to `extract`; the `type` segment must be a search type (e.g. 'apify/googlemaps/place.search' or 'apify/googlemaps/place.search:compass').",
+    inputSchema: {
+      queries: z
+        .array(z.string())
+        .nonempty()
+        .describe(
+          "Non-empty list of search queries. Many actors accept either plain terms or URLs that pin the search context (e.g. a Google Maps URL anchors the search to a location)."
+        ),
+      provider: z
+        .string()
+        .describe(
+          "Search service slug 'provider/platform/type' or 'provider/platform/type:tag' (e.g. 'apify/googlemaps/place.search')."
+        ),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Per-query cap on returned records (default 100)."),
+      fallback: z
+        .boolean()
+        .optional()
+        .describe(
+          "Whether to fall over to alternative providers if the requested one fails (default true)."
+        ),
+    },
+  },
+  async ({ queries, provider, limit, fallback }) => {
+    const result = await client.search({ queries, provider, limit, fallback });
     return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
   }
 );
@@ -46,7 +119,8 @@ server.registerTool(
   "list_providers",
   {
     title: "List providers",
-    description: "List all available data extraction providers and their status",
+    description:
+      "List all available providers, their status, supported platforms, and supported extraction and search types.",
     inputSchema: {},
   },
   async () => {
@@ -56,30 +130,75 @@ server.registerTool(
 );
 
 server.registerTool(
-  "get_balance",
+  "get_provider",
   {
-    title: "Get balance",
-    description: "Check your SocialRouter credit balance",
-    inputSchema: {},
+    title: "Get provider details",
+    description:
+      "Get full details for a provider, including per-platform/type pricing for both extraction and search services.",
+    inputSchema: {
+      id: z.string().describe("Provider ID (e.g. 'apify')."),
+    },
   },
-  async () => {
-    const balance = await client.getBalance();
-    return { content: [{ type: "text" as const, text: `Balance: $${balance.balance.toFixed(2)} ${balance.currency}` }] };
+  async ({ id }) => {
+    const provider = await client.getProvider(id);
+    return { content: [{ type: "text" as const, text: JSON.stringify(provider, null, 2) }] };
   }
 );
 
 server.registerTool(
   "get_extraction",
   {
-    title: "Get extraction",
-    description: "Get the result of a previous extraction by its ID",
+    title: "Get extraction or search by ID",
+    description:
+      "Retrieve a previous extraction or search by its ID. Works for both `kind: extract` and `kind: search` results.",
     inputSchema: {
-      id: z.string().describe("The extraction ID (e.g., ext_abc123)"),
+      id: z.string().describe("The extraction ID (e.g., ext_abc123)."),
     },
   },
   async ({ id }) => {
     const result = await client.getExtraction(id);
     return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.registerTool(
+  "get_balance",
+  {
+    title: "Get balance",
+    description: "Check your SocialRouter credit balance.",
+    inputSchema: {},
+  },
+  async () => {
+    const balance = await client.getBalance();
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `Balance: $${balance.balance.toFixed(2)} ${balance.currency}`,
+        },
+      ],
+    };
+  }
+);
+
+server.registerTool(
+  "get_usage",
+  {
+    title: "Get usage summary",
+    description:
+      "Get a usage summary for the authenticated account over the last N days, broken down by provider and platform.",
+    inputSchema: {
+      days: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Number of days to summarize (default 30)."),
+    },
+  },
+  async ({ days }) => {
+    const usage = await client.getUsage(days);
+    return { content: [{ type: "text" as const, text: JSON.stringify(usage, null, 2) }] };
   }
 );
 
