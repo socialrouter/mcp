@@ -58,9 +58,15 @@ server.registerTool(
         .describe(
           "Whether to fall over to alternative providers if the requested one fails (default true)."
         ),
+      options: z
+        .record(z.string(), z.unknown())
+        .optional()
+        .describe(
+          "Per-actor input overrides as a JSON object. Each actor decides which keys it honors (unknown keys are dropped server-side). Use for actor-specific knobs like `proxyCountry` or `language`."
+        ),
     },
   },
-  async ({ url, urls, provider, limit, fallback }) => {
+  async ({ url, urls, provider, limit, fallback, options }) => {
     if (!url && !urls) {
       return {
         content: [
@@ -72,7 +78,7 @@ server.registerTool(
         isError: true,
       };
     }
-    const result = await client.extract({ url, urls, provider, limit, fallback });
+    const result = await client.extract({ url, urls, provider, limit, fallback, options });
     return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
   }
 );
@@ -107,10 +113,16 @@ server.registerTool(
         .describe(
           "Whether to fall over to alternative providers if the requested one fails (default true)."
         ),
+      options: z
+        .record(z.string(), z.unknown())
+        .optional()
+        .describe(
+          "Per-actor input overrides as a JSON object. Each actor decides which keys it honors (unknown keys are dropped server-side)."
+        ),
     },
   },
-  async ({ queries, provider, limit, fallback }) => {
-    const result = await client.search({ queries, provider, limit, fallback });
+  async ({ queries, provider, limit, fallback, options }) => {
+    const result = await client.search({ queries, provider, limit, fallback, options });
     return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
   }
 );
