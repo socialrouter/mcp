@@ -25,7 +25,7 @@ const catalog = new CatalogCache(baseUrl);
 
 const server = new McpServer({
   name: "socialrouter",
-  version: "0.5.0",
+  version: "0.6.0",
 });
 
 interface ToolResult {
