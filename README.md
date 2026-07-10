@@ -28,36 +28,61 @@ Get an API key at [socialrouter.io](https://socialrouter.io), then add the serve
 
 Add to `~/.cursor/mcp.json` with the same shape.
 
+## How it works
+
+The server is a thin, stateless wrapper over the API, built around service
+slugs of the form `<provider>/<platform>/<type>` (e.g.
+`brightdata/linkedin/profile.info`). The agent discovers what exists with
+`list_services`, then calls `extract` (URL-driven) or `search` (query-driven)
+with the chosen slug. The MCP does no URL detection and no routing — picking
+the right service is the agent's job, and the catalog gives it everything it
+needs: platform, type, price per record, and batch cap for every live
+service.
+
+Every slug is validated against the live catalog (`GET /v1/providers`)
+**before** the request is sent:
+
+- the `service` parameter is an enum of the slugs live at startup, so the
+  agent cannot invent an invalid one;
+- at call time the slug is re-checked against the refreshed catalog (5-minute
+  TTL) and the batch size against the provider's cap;
+- validation failures return corrective errors listing the closest valid
+  alternatives (same platform/type, other providers) instead of a bare 4xx.
+
+The catalog is fetched once at startup — if it cannot be loaded the server
+exits, since an unreachable catalog means the API itself is unreachable — and
+refreshed lazily afterwards; if a refresh fails, the last known catalog keeps
+being served.
+
 ## Tools
 
 | Tool | Description |
 |---|---|
-| `extract` | URL-driven extraction. Pass `url` (single) or `urls` (batch). |
-| `search` | Query-driven search (e.g. Google Maps place search). |
-| `list_providers` | List available providers and their supported platforms/types. |
-| `get_provider` | Get a single provider's details and pricing. |
+| `list_services` | One row per live (provider, platform, type) with price per record and batch cap, cheapest first within each platform/type. Filter by `platform` and/or `type`. |
+| `extract` | Extract data from one or more URLs through a service slug. All URLs in a call must belong to the service's platform. |
+| `search` | Query-driven search (no URL needed) through a search service slug (type ends in `.search`). |
 | `get_extraction` | Retrieve a previous extraction or search by ID. |
-| `get_balance` | Check your SocialRouter credit balance. |
-| `get_usage` | Get a usage summary by provider and platform. |
+| `get_account` | Credit balance + usage summary (by provider and platform) over the last N days. |
 
-### `extract` parameters
+### `extract` / `search` parameters
 
-| Param | Required | Description |
+| Param | Tools | Description |
 |---|---|---|
-| `url` | one of `url`/`urls` | Single social media URL. |
-| `urls` | one of `url`/`urls` | Batch list of URLs (only effective for batch-capable actors). |
-| `provider` | yes | Service slug `provider/platform/type[:tag]` (e.g. `apify/linkedin/profile.info`, `apify/linkedin/profile.posts:apimaestro`). Copy from [socialrouter.io/providers](https://www.socialrouter.io/providers). |
-| `limit` | no | Max records (default 100). |
-| `fallback` | no | Whether to fall over to alternative providers on failure (default `true`). |
+| `urls` | `extract` | One or more URLs, all on the service's platform. |
+| `queries` | `search` | One or more search terms, or URLs that pin the search context. |
+| `service` | both | Required. Service slug `<provider>/<platform>/<type>` from `list_services`. |
+| `limit` | both | Optional. Max records to return (default 100). |
+| `variant` | both | Optional, advanced. Actor variant of the service, appended to the slug as `:variant`. |
+| `fallback` | both | Optional. Retry alternative providers on failure (default `true`). |
+| `options` | both | Optional. Actor-specific overrides (e.g. `proxyCountry`). |
 
-### `search` parameters
+### Typical flow
 
-| Param | Required | Description |
-|---|---|---|
-| `queries` | yes | Non-empty list of search queries (terms or context-pinning URLs). |
-| `provider` | yes | Slug whose `type` is a search type, e.g. `apify/googlemaps/place.search`. |
-| `limit` | no | Per-query record cap (default 100). |
-| `fallback` | no | Whether to fall over to alternative providers on failure (default `true`). |
+1. `list_services` with `platform: "linkedin"` → see what LinkedIn data is
+   available and at what price.
+2. `extract` with `urls: ["https://www.linkedin.com/in/..."]` and
+   `service: "brightdata/linkedin/profile.info"`.
+3. (async results) `get_extraction` with the returned ID.
 
 ## Environment Variables
 

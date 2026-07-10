@@ -3,7 +3,15 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { SocialRouter } from "@socialrouter/sdk";
+import { SocialRouter, type Platform } from "@socialrouter/sdk";
+import {
+  CatalogCache,
+  checkService,
+  type CatalogSnapshot,
+  type ServiceKind,
+} from "./catalog.js";
+
+const DEFAULT_BASE_URL = "https://api.socialrouter.io";
 
 const apiKey = process.env.SOCIALROUTER_API_KEY;
 if (!apiKey) {
@@ -11,212 +19,215 @@ if (!apiKey) {
   process.exit(1);
 }
 
-const client = new SocialRouter({
-  apiKey,
-  baseUrl: process.env.SOCIALROUTER_BASE_URL,
-});
+const baseUrl = (process.env.SOCIALROUTER_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/$/, "");
+const client = new SocialRouter({ apiKey, baseUrl, client: "mcp" });
+const catalog = new CatalogCache(baseUrl);
 
 const server = new McpServer({
   name: "socialrouter",
-  version: "0.3.0",
+  version: "0.5.0",
 });
 
-// ─── Tools ───────────────────────────────────────────────
+interface ToolResult {
+  [key: string]: unknown;
+  content: { type: "text"; text: string }[];
+  isError?: boolean;
+}
 
-server.registerTool(
-  "extract",
-  {
-    title: "Extract social data from URLs",
-    description:
-      "Run a URL-driven extraction. The `provider` argument is a service slug of the form 'provider/platform/type' (e.g. 'apify/linkedin/profile.info'), with an optional ':tag' suffix to select an actor variant (e.g. 'apify/linkedin/profile.posts:apimaestro'). Find available slugs at https://www.socialrouter.io/providers. Pass either `url` (single) or `urls` (batch — only meaningful for batch-capable actors).",
-    inputSchema: {
-      url: z
-        .string()
-        .optional()
-        .describe("Single social media URL. Mutually exclusive with `urls`."),
-      urls: z
-        .array(z.string())
-        .nonempty()
-        .optional()
-        .describe(
-          "Batch list of social media URLs. Mutually exclusive with `url`. Only effective for batch-capable actors."
-        ),
-      provider: z
-        .string()
-        .describe(
-          "Service slug 'provider/platform/type' or 'provider/platform/type:tag' (e.g. 'apify/linkedin/profile.info')."
-        ),
-      limit: z
-        .number()
-        .int()
-        .positive()
-        .optional()
-        .describe("Maximum number of records to return (default 100)."),
-      fallback: z
-        .boolean()
-        .optional()
-        .describe(
-          "Whether to fall over to alternative providers if the requested one fails (default true)."
-        ),
-      options: z
-        .record(z.string(), z.unknown())
-        .optional()
-        .describe(
-          "Per-actor input overrides as a JSON object. Each actor decides which keys it honors (unknown keys are dropped server-side). Use for actor-specific knobs like `proxyCountry` or `language`."
-        ),
-    },
-  },
-  async ({ url, urls, provider, limit, fallback, options }) => {
-    if (!url && !urls) {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: "Error: provide either `url` or `urls`.",
-          },
-        ],
-        isError: true,
-      };
-    }
-    const result = await client.extract({ url, urls, provider, limit, fallback, options });
-    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
-  }
-);
+function err(text: string): ToolResult {
+  return { content: [{ type: "text", text }], isError: true };
+}
 
-server.registerTool(
-  "search",
-  {
-    title: "Search via a provider (query-driven)",
-    description:
-      "Run a query-driven search (companion to `extract`). Use this for services where the input is a search term rather than a URL — currently `place.search` on Google Maps. The `provider` slug grammar is identical to `extract`; the `type` segment must be a search type (e.g. 'apify/googlemaps/place.search' or 'apify/googlemaps/place.search:compass').",
-    inputSchema: {
-      queries: z
-        .array(z.string())
-        .nonempty()
-        .describe(
-          "Non-empty list of search queries. Many actors accept either plain terms or URLs that pin the search context (e.g. a Google Maps URL anchors the search to a location)."
-        ),
-      provider: z
-        .string()
-        .describe(
-          "Search service slug 'provider/platform/type' or 'provider/platform/type:tag' (e.g. 'apify/googlemaps/place.search')."
-        ),
-      limit: z
-        .number()
-        .int()
-        .positive()
-        .optional()
-        .describe("Per-query cap on returned records (default 100)."),
-      fallback: z
-        .boolean()
-        .optional()
-        .describe(
-          "Whether to fall over to alternative providers if the requested one fails (default true)."
-        ),
-      options: z
-        .record(z.string(), z.unknown())
-        .optional()
-        .describe(
-          "Per-actor input overrides as a JSON object. Each actor decides which keys it honors (unknown keys are dropped server-side)."
-        ),
-    },
-  },
-  async ({ queries, provider, limit, fallback, options }) => {
-    const result = await client.search({ queries, provider, limit, fallback, options });
-    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
-  }
-);
+function ok(data: unknown): ToolResult {
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+}
 
-server.registerTool(
-  "list_providers",
-  {
-    title: "List providers",
-    description:
-      "List all available providers, their status, supported platforms, and supported extraction and search types.",
-    inputSchema: {},
-  },
-  async () => {
-    const providers = await client.listProviders();
-    return { content: [{ type: "text" as const, text: JSON.stringify(providers, null, 2) }] };
-  }
-);
+/** Enum of the slugs live at startup; free string if a kind has none yet. */
+function slugSchema(slugs: string[]): z.ZodType<string> {
+  return slugs.length ? z.enum(slugs as [string, ...string[]]) : z.string();
+}
 
-server.registerTool(
-  "get_provider",
-  {
-    title: "Get provider details",
-    description:
-      "Get full details for a provider, including per-platform/type pricing for both extraction and search services.",
-    inputSchema: {
-      id: z.string().describe("Provider ID (e.g. 'apify')."),
-    },
-  },
-  async ({ id }) => {
-    const provider = await client.getProvider(id);
-    return { content: [{ type: "text" as const, text: JSON.stringify(provider, null, 2) }] };
-  }
-);
+interface RunArgs {
+  limit?: number;
+  variant?: string;
+  fallback?: boolean;
+  options?: Record<string, unknown>;
+}
 
-server.registerTool(
-  "get_extraction",
-  {
-    title: "Get extraction or search by ID",
-    description:
-      "Retrieve a previous extraction or search by its ID. Works for both `kind: extract` and `kind: search` results.",
-    inputSchema: {
-      id: z.string().describe("The extraction ID (e.g., ext_abc123)."),
-    },
-  },
-  async ({ id }) => {
-    const result = await client.getExtraction(id);
-    return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
-  }
-);
+/**
+ * The server is a thin, stateless wrapper over the API: the agent picks a
+ * service slug from the catalog (list_services), the MCP validates it against
+ * the same catalog before spending a round-trip, and the API does the rest.
+ * No URL detection and no routing happen here — that is the API's job.
+ */
+function registerTools(startup: CatalogSnapshot) {
+  const platforms = startup.platforms();
+  const types = startup.types();
 
-server.registerTool(
-  "get_balance",
-  {
-    title: "Get balance",
-    description: "Check your SocialRouter credit balance.",
-    inputSchema: {},
-  },
-  async () => {
-    const balance = await client.getBalance();
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: `Balance: $${balance.balance.toFixed(2)} ${balance.currency}`,
-        },
-      ],
+  // After a successful startup fetch the cache always has a snapshot (stale
+  // at worst); the fallback only guards the type.
+  const snap = async () => (await catalog.get()) ?? startup;
+
+  const commonParams = {
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("Maximum number of records to return (default 100)."),
+    variant: z
+      .string()
+      .optional()
+      .describe(
+        "Actor variant of the service, appended to the slug as ':variant'. Advanced — omit unless you know the variant exists.",
+      ),
+    fallback: z
+      .boolean()
+      .optional()
+      .describe(
+        "Retry with alternative providers if the requested one fails (default true).",
+      ),
+    options: z
+      .record(z.string(), z.unknown())
+      .optional()
+      .describe("Actor-specific overrides (e.g. proxyCountry, language)."),
+  };
+
+  async function run(
+    kind: ServiceKind,
+    service: string,
+    batch: string[],
+    args: RunArgs,
+  ): Promise<ToolResult> {
+    const check = checkService(await snap(), kind, service, batch.length);
+    if (check.error) return err(check.error);
+    const slug = args.variant ? `${service}:${args.variant}` : service;
+    const common = {
+      provider: slug,
+      limit: args.limit,
+      fallback: args.fallback,
+      options: args.options,
     };
+    const result =
+      kind === "search"
+        ? await client.search({ queries: batch, ...common })
+        : await client.extract({ urls: batch, ...common });
+    return ok(result);
   }
-);
 
-server.registerTool(
-  "get_usage",
-  {
-    title: "Get usage summary",
-    description:
-      "Get a usage summary for the authenticated account over the last N days, broken down by provider and platform.",
-    inputSchema: {
-      days: z
-        .number()
-        .int()
-        .positive()
-        .optional()
-        .describe("Number of days to summarize (default 30)."),
+  server.registerTool(
+    "list_services",
+    {
+      title: "List available services",
+      description:
+        "List every service you can call: one row per (provider, platform, type) with price per record and batch cap, cheapest first within each platform/type. Use the 'service' value with the extract or search tool. Filter with 'platform' and/or 'type' to keep the output small.",
+      inputSchema: {
+        platform: z
+          .enum(platforms as [Platform, ...Platform[]])
+          .optional()
+          .describe("Filter by platform."),
+        type: z
+          .enum(types as [string, ...string[]])
+          .optional()
+          .describe("Filter by service type (e.g. 'profile.info')."),
+      },
     },
-  },
-  async ({ days }) => {
-    const usage = await client.getUsage(days);
-    return { content: [{ type: "text" as const, text: JSON.stringify(usage, null, 2) }] };
-  }
-);
+    async ({ platform, type }: { platform?: Platform; type?: string }) =>
+      ok((await snap()).services({ platform, type })),
+  );
+
+  server.registerTool(
+    "extract",
+    {
+      title: "Extract social data from URLs",
+      description:
+        `Extract data from social media URLs. 'service' is a '<provider>/<platform>/<type>' slug — pick one from list_services whose platform matches the URLs and whose type matches the data you want (e.g. a LinkedIn profile URL + 'profile.info' for profile data). All URLs in one call must belong to the service's platform. Platforms: ${platforms.join(", ")}.`,
+      inputSchema: {
+        urls: z
+          .array(z.string())
+          .nonempty()
+          .describe("One or more URLs, all on the service's platform."),
+        service: slugSchema(startup.slugs("extract")).describe(
+          "Service slug from list_services (e.g. 'brightdata/linkedin/profile.info').",
+        ),
+        ...commonParams,
+      },
+    },
+    async ({ urls, service, ...args }: { urls: string[]; service: string } & RunArgs) =>
+      run("extract", service, urls, args),
+  );
+
+  server.registerTool(
+    "search",
+    {
+      title: "Search by text query",
+      description:
+        "Run a query-driven search (no URL needed). 'service' is a '<provider>/<platform>/<type>' slug whose type ends in '.search' — pick one from list_services.",
+      inputSchema: {
+        queries: z
+          .array(z.string())
+          .nonempty()
+          .describe("Search terms, or URLs that pin the search context."),
+        service: slugSchema(startup.slugs("search")).describe(
+          "Search service slug from list_services (e.g. 'apify/googlemaps/place.search').",
+        ),
+        ...commonParams,
+      },
+    },
+    async ({ queries, service, ...args }: { queries: string[]; service: string } & RunArgs) =>
+      run("search", service, queries, args),
+  );
+
+  server.registerTool(
+    "get_extraction",
+    {
+      title: "Get extraction or search by ID",
+      description:
+        "Retrieve a previous extraction or search by its ID. Works for both extract and search results.",
+      inputSchema: {
+        id: z.string().describe("The extraction ID (e.g., ext_abc123)."),
+      },
+    },
+    async ({ id }: { id: string }) => ok(await client.getExtraction(id)),
+  );
+
+  server.registerTool(
+    "get_account",
+    {
+      title: "Get account balance and usage",
+      description:
+        "Get your SocialRouter credit balance and a usage summary over the last N days, broken down by provider and platform.",
+      inputSchema: {
+        days: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Number of days to summarize (default 30)."),
+      },
+    },
+    async ({ days }: { days?: number }) => {
+      const [balance, usage] = await Promise.all([
+        client.getBalance(),
+        client.getUsage(days),
+      ]);
+      return ok({ balance, usage });
+    },
+  );
+}
 
 // ─── Start ───────────────────────────────────────────────
 
 async function main() {
+  const startup = await catalog.get();
+  if (!startup) {
+    // No catalog means the API itself is unreachable — nothing would work.
+    console.error(
+      `[socialrouter-mcp] could not load the service catalog from ${baseUrl} — is the API reachable?`,
+    );
+    process.exit(1);
+  }
+  registerTools(startup);
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
