@@ -22,6 +22,31 @@ export const RAW_CATALOG = [
     search_pricing: [
       { type: "place.search", platforms: ["googlemaps"], price_per_record: 0.00552, max_queries: 100 },
     ],
+    input_specs: [
+      {
+        platform: "linkedin",
+        type: "profile.info",
+        kind: "url",
+        accepts: [
+          {
+            format: "https://www.linkedin.com/in/<handle>",
+            example: "https://www.linkedin.com/in/amili",
+            pattern: "linkedin\\.com\\/in\\/[^\\/?#]+",
+          },
+        ],
+      },
+      {
+        platform: "googlemaps",
+        type: "place.search",
+        kind: "query",
+        accepts: [
+          {
+            format: "Free-text search query",
+            example: "best pizza in Brooklyn, NY",
+          },
+        ],
+      },
+    ],
   },
   {
     id: "brightdata",
@@ -32,6 +57,22 @@ export const RAW_CATALOG = [
       { type: "profile.info", platforms: ["linkedin", "instagram"], price_per_record: 0.001725, max_urls: 1000 },
       { type: "profile.reels", platforms: ["instagram", "facebook"], price_per_record: 0.002, max_urls: 20 },
       { type: "post.info", platforms: ["x", "tiktok"], price_per_record: 0.002, max_urls: 50 },
+    ],
+    input_specs: [
+      {
+        platform: "linkedin",
+        type: "profile.info",
+        kind: "url",
+        accepts: [
+          {
+            format: "https://www.linkedin.com/in/<handle>",
+            example: "https://www.linkedin.com/in/amili",
+            pattern: "linkedin\\.com\\/in\\/[^\\/?#]+",
+          },
+        ],
+      },
+      // instagram/profile.info deliberately has NO spec: exercises the
+      // "older API / no metadata" path where the row carries no input info.
     ],
   },
   {

@@ -14,6 +14,28 @@ interface RawPricingRow {
   variants?: string[];
 }
 
+/** One accepted input shape of a service. */
+export interface ServiceInputFormat {
+  /** Canonical shape, e.g. "https://www.linkedin.com/in/<handle>". */
+  format: string;
+  /** A concrete valid input. */
+  example: string;
+  /** Validation regex source — informational; the API validates, not us. */
+  pattern?: string;
+  note?: string;
+}
+
+/** Expected input of a service. An input may match any `accepts` entry. */
+export interface ServiceInputSpec {
+  kind: "url" | "query";
+  accepts: ServiceInputFormat[];
+}
+
+interface RawInputSpec extends ServiceInputSpec {
+  platform: Platform;
+  type: string;
+}
+
 interface RawProvider {
   id: string;
   name: string;
@@ -21,6 +43,8 @@ interface RawProvider {
   supported_platforms: Platform[];
   pricing: RawPricingRow[];
   search_pricing?: RawPricingRow[];
+  /** Absent on API versions that predate input-format metadata. */
+  input_specs?: RawInputSpec[];
 }
 
 export type ServiceKind = "extract" | "search";
@@ -38,6 +62,12 @@ export interface ServiceRow {
   /** Max URLs (extract) or queries (search) accepted per request. */
   max_batch: number;
   variants?: string[];
+  /**
+   * Expected input format(s) for this service, as advertised by the API.
+   * Display-only: the API is the validation authority and returns the
+   * corrective error itself. Absent when the API doesn't advertise one.
+   */
+  input?: ServiceInputSpec;
 }
 
 function usable(status: string): boolean {
@@ -50,8 +80,14 @@ export class CatalogSnapshot {
   constructor(raw: RawProvider[]) {
     for (const p of raw) {
       if (!usable(p.status)) continue;
+      const specByCombo = new Map<string, ServiceInputSpec>();
+      for (const s of p.input_specs ?? []) {
+        const { platform, type, ...spec } = s;
+        specByCombo.set(`${platform}|${type}`, spec);
+      }
       const push = (row: RawPricingRow, kind: ServiceKind) => {
         for (const platform of row.platforms) {
+          const input = specByCombo.get(`${platform}|${row.type}`);
           this.rows.push({
             service: `${p.id}/${platform}/${row.type}`,
             kind,
@@ -62,6 +98,7 @@ export class CatalogSnapshot {
             price_per_record: row.price_per_record,
             max_batch: row.max_urls ?? row.max_queries ?? 1,
             ...(row.variants?.length ? { variants: row.variants } : {}),
+            ...(input ? { input } : {}),
           });
         }
       };

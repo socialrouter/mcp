@@ -74,7 +74,7 @@ being served.
 | `limit` | both | Optional. Max records to return (default 100). |
 | `variant` | both | Optional, advanced. Actor variant of the service, appended to the slug as `:variant`. |
 | `fallback` | both | Optional. Retry alternative providers on failure (default `true`). |
-| `options` | both | Optional. Actor-specific overrides (e.g. `proxyCountry`). |
+| `options` | both | Optional. Actor-specific overrides (e.g. `includeEmail` on `apify/linkedin/profile.info`). Unknown keys are dropped without an error. |
 
 ### Typical flow
 

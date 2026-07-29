@@ -57,6 +57,21 @@ describe("CatalogSnapshot", () => {
     expect(snap.types()).toContain("place.search");
   });
 
+  it("attaches the advertised input spec to matching rows", () => {
+    const row = snap.find("brightdata/linkedin/profile.info");
+    expect(row?.input).toMatchObject({
+      kind: "url",
+      accepts: [
+        {
+          format: "https://www.linkedin.com/in/<handle>",
+          example: "https://www.linkedin.com/in/amili",
+        },
+      ],
+    });
+    // No spec advertised for this combo → no input metadata on the row.
+    expect(snap.find("brightdata/instagram/profile.info")?.input).toBeUndefined();
+  });
+
   it("passes variants through when present", () => {
     const withVariants = makeSnapshot([
       {
