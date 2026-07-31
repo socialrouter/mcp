@@ -1,88 +1,106 @@
 import { CatalogSnapshot } from "../src/catalog.js";
 
 /**
- * Small but realistic catalog: two usable providers with overlapping combos
- * (to exercise cheapest-first ordering) and one down provider (to exercise
- * status filtering). Prices mirror the live catalog's ordering on linkedin
- * profile.info: brightdata < apify.
+ * Small but realistic slice of GET /v1/services: services with several
+ * offers (to exercise failover ordering and per-offer caps), a query-kind
+ * service, services with typed options, and one entry with no offer at all
+ * (declared but unserved — it must not surface as callable).
  */
 export const RAW_CATALOG = [
   {
-    id: "apify",
-    name: "Apify",
-    status: "active",
-    supported_platforms: ["linkedin", "googlemaps", "youtube"],
-    pricing: [
-      { type: "profile.info", platforms: ["linkedin"], price_per_record: 0.0069, max_urls: 1 },
-      { type: "profile.posts", platforms: ["linkedin", "youtube"], price_per_record: 0.00552, max_urls: 100 },
-      { type: "profile.shorts", platforms: ["youtube"], price_per_record: 0.00552, max_urls: 100 },
-      { type: "video.transcript", platforms: ["youtube"], price_per_record: 0.00552, max_urls: 100 },
-      { type: "channel.info", platforms: ["youtube"], price_per_record: 0.00552, max_urls: 100 },
-    ],
-    search_pricing: [
-      { type: "place.search", platforms: ["googlemaps"], price_per_record: 0.00552, max_queries: 100 },
-    ],
-    input_specs: [
+    platform: "linkedin",
+    service: "profile.info",
+    endpoint: "/v1/linkedin/profile.info",
+    input_kind: "url",
+    input_field: "urls",
+    accepts: [
       {
-        platform: "linkedin",
-        type: "profile.info",
-        kind: "url",
-        accepts: [
-          {
-            format: "https://www.linkedin.com/in/<handle>",
-            example: "https://www.linkedin.com/in/amili",
-            pattern: "linkedin\\.com\\/in\\/[^\\/?#]+",
-          },
-        ],
+        format: "https://www.linkedin.com/in/<handle>",
+        example: "https://www.linkedin.com/in/amili",
+        pattern: "linkedin\\.com\\/in\\/[^\\/?#]+",
       },
+    ],
+    options: [
       {
-        platform: "googlemaps",
-        type: "place.search",
-        kind: "query",
-        accepts: [
-          {
-            format: "Free-text search query",
-            example: "best pizza in Brooklyn, NY",
-          },
-        ],
+        name: "includeEmail",
+        type: "boolean",
+        default: true,
+        description: "Include the public email lookup when the offer supports it.",
       },
+    ],
+    offers: [
+      { offer: "brightdata/linkedin", source: "brightdata", price_per_record: 0.001725, max_inputs: 1000 },
+      { offer: "apify/apimaestro", source: "apify", price_per_record: 0.0069, max_inputs: 1 },
     ],
   },
   {
-    id: "brightdata",
-    name: "Bright Data",
-    status: "active",
-    supported_platforms: ["linkedin", "instagram", "facebook", "x", "tiktok"],
-    pricing: [
-      { type: "profile.info", platforms: ["linkedin", "instagram"], price_per_record: 0.001725, max_urls: 1000 },
-      { type: "profile.reels", platforms: ["instagram", "facebook"], price_per_record: 0.002, max_urls: 20 },
-      { type: "post.info", platforms: ["x", "tiktok"], price_per_record: 0.002, max_urls: 50 },
-    ],
-    input_specs: [
+    platform: "reddit",
+    service: "subreddit.posts",
+    endpoint: "/v1/reddit/subreddit.posts",
+    input_kind: "url",
+    input_field: "urls",
+    accepts: [
       {
-        platform: "linkedin",
-        type: "profile.info",
-        kind: "url",
-        accepts: [
-          {
-            format: "https://www.linkedin.com/in/<handle>",
-            example: "https://www.linkedin.com/in/amili",
-            pattern: "linkedin\\.com\\/in\\/[^\\/?#]+",
-          },
-        ],
+        format: "https://www.reddit.com/r/<subreddit>",
+        example: "https://www.reddit.com/r/programming",
+        pattern: "reddit\\.com\\/r\\/[^\\/?#]+",
       },
-      // instagram/profile.info deliberately has NO spec: exercises the
-      // "older API / no metadata" path where the row carries no input info.
+    ],
+    options: [
+      {
+        name: "sort",
+        type: "enum",
+        values: ["hot", "new", "top", "rising"],
+        description: "Listing sort.",
+      },
+    ],
+    offers: [
+      { offer: "apify/harshmaur", source: "apify", price_per_record: 0.002, max_inputs: 100 },
+      { offer: "apify/trudax", source: "apify", price_per_record: 0.0035, max_inputs: 10 },
     ],
   },
   {
-    id: "downprov",
-    name: "Down Provider",
-    status: "down",
-    supported_platforms: ["linkedin"],
-    pricing: [
-      { type: "profile.info", platforms: ["linkedin"], price_per_record: 0.0001, max_urls: 10 },
+    platform: "youtube",
+    service: "channel.info",
+    endpoint: "/v1/youtube/channel.info",
+    input_kind: "url",
+    input_field: "urls",
+    accepts: [
+      {
+        format: "https://www.youtube.com/@<handle>",
+        example: "https://www.youtube.com/@mkbhd",
+        pattern: "youtube\\.com\\/@[^\\/?#]+",
+      },
     ],
+    options: [],
+    offers: [
+      { offer: "apify/streamers", source: "apify", price_per_record: 0.00552, max_inputs: 100 },
+    ],
+  },
+  {
+    platform: "googlemaps",
+    service: "place.search",
+    endpoint: "/v1/googlemaps/place.search",
+    input_kind: "query",
+    input_field: "queries",
+    accepts: [
+      { format: "Free-text search query", example: "best pizza in Brooklyn, NY" },
+    ],
+    options: [],
+    offers: [
+      { offer: "apify/compass", source: "apify", price_per_record: 0.00552, max_inputs: 100 },
+    ],
+  },
+  {
+    // Declared but served by nobody: must never surface as callable.
+    platform: "instagram",
+    service: "profile.info",
+    endpoint: "/v1/instagram/profile.info",
+    input_kind: "url",
+    input_field: "urls",
+    accepts: [],
+    options: [],
+    offers: [],
   },
 ];
 

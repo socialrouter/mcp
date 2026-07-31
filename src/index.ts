@@ -3,13 +3,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { SocialRouter, type Platform } from "@socialrouter/sdk";
-import {
-  CatalogCache,
-  checkService,
-  type CatalogSnapshot,
-  type ServiceKind,
-} from "./catalog.js";
+import { SocialRouter, type Extraction, type Platform } from "@socialrouter/sdk";
+import { CatalogCache, checkService, type CatalogSnapshot } from "./catalog.js";
 
 const DEFAULT_BASE_URL = "https://api.socialrouter.io";
 
@@ -25,7 +20,7 @@ const catalog = new CatalogCache(baseUrl);
 
 const server = new McpServer({
   name: "socialrouter",
-  version: "0.6.1",
+  version: "0.7.0",
 });
 
 interface ToolResult {
@@ -43,13 +38,12 @@ function ok(data: unknown): ToolResult {
 }
 
 /**
- * Wrap extraction/search results before handing them to the host agent. The
- * records contain scraped, attacker-controllable text (bios, comments, display
- * names) that could carry prompt-injection payloads. Marking the block as
- * untrusted data tells the agent to treat it as content to report on, never as
- * instructions to follow — and the queries it might otherwise be steered into
- * leave the machine for third-party providers (SECURITY.md, "MCP sans
- * marquage").
+ * Wrap run results before handing them to the host agent. The records contain
+ * scraped, attacker-controllable text (bios, comments, display names) that
+ * could carry prompt-injection payloads. Marking the block as untrusted data
+ * tells the agent to treat it as content to report on, never as instructions
+ * to follow — and the queries it might otherwise be steered into leave the
+ * machine for third-party providers (SECURITY.md, "MCP sans marquage").
  */
 function okUntrusted(data: unknown): ToolResult {
   const notice =
@@ -64,17 +58,33 @@ function okUntrusted(data: unknown): ToolResult {
   };
 }
 
-/** Enum of the slugs live at startup; free string if a kind has none yet. */
+/** Enum of the service slugs live at startup; free string if none yet. */
 function slugSchema(slugs: string[]): z.ZodType<string> {
   return slugs.length ? z.enum(slugs as [string, ...string[]]) : z.string();
 }
 
 interface RunArgs {
+  provider?: string;
   limit?: number;
-  variant?: string;
-  fallback?: boolean;
   options?: Record<string, unknown>;
 }
+
+/**
+ * The run body, as the API takes it. The tool dispatches over a runtime slug
+ * so the SDK's per-service typing can't apply — this is the one boundary
+ * where the shape is checked against the catalog instead of the compiler.
+ */
+type AnyRunInput = {
+  urls?: string[];
+  queries?: string[];
+  provider?: `${string}/${string}`;
+  limit?: number;
+  options?: Record<string, unknown>;
+};
+const runService = client.run as unknown as (
+  service: string,
+  input: AnyRunInput,
+) => Promise<Extraction>;
 
 /**
  * The server is a thin, stateless wrapper over the API: the agent picks a
@@ -84,138 +94,93 @@ interface RunArgs {
  */
 function registerTools(startup: CatalogSnapshot) {
   const platforms = startup.platforms();
-  const types = startup.types();
+  const names = startup.names();
 
   // After a successful startup fetch the cache always has a snapshot (stale
   // at worst); the fallback only guards the type.
   const snap = async () => (await catalog.get()) ?? startup;
-
-  const commonParams = {
-    limit: z
-      .number()
-      .int()
-      .positive()
-      .optional()
-      .describe("Maximum number of records to return (default 100)."),
-    variant: z
-      .string()
-      .optional()
-      .describe(
-        "Actor variant of the service, appended to the slug as ':variant'. Advanced — omit unless you know the variant exists.",
-      ),
-    fallback: z
-      .boolean()
-      .optional()
-      .describe(
-        "Retry with alternative providers if the requested one fails (default true).",
-      ),
-    options: z
-      .record(z.string(), z.unknown())
-      .optional()
-      .describe(
-        "Actor-specific overrides, e.g. {\"includeEmail\": false} on apify/linkedin/profile.info. " +
-          "Keys are actor-specific and the catalogue does not advertise them — unknown keys are " +
-          "dropped without an error, so only pass keys the user named or that are documented for " +
-          "that actor.",
-      ),
-  };
-
-  async function run(
-    kind: ServiceKind,
-    service: string,
-    batch: string[],
-    args: RunArgs,
-  ): Promise<ToolResult> {
-    const check = checkService(await snap(), kind, service, batch.length);
-    if (check.error) return err(check.error);
-    const slug = args.variant ? `${service}:${args.variant}` : service;
-    const common = {
-      provider: slug,
-      limit: args.limit,
-      fallback: args.fallback,
-      options: args.options,
-    };
-    const result =
-      kind === "search"
-        ? await client.search({ queries: batch, ...common })
-        : await client.extract({ urls: batch, ...common });
-    // Result records hold scraped third-party text — mark it untrusted.
-    return okUntrusted(result);
-  }
 
   server.registerTool(
     "list_services",
     {
       title: "List available services",
       description:
-        "List every service you can call: one row per (provider, platform, type) with price per record, batch cap, and the exact input the service expects — 'input.accepts' lists every valid shape, each with a 'format' and a concrete 'example'; the API rejects inputs that match none of them. Cheapest first within each platform/type. Use the 'service' value with the extract or search tool. Filter with 'platform' and/or 'type' to keep the output small.",
+        "List every service you can call: one row per '<platform>/<service>' with the exact input it expects — 'input_kind' says whether it takes URLs or free-text queries, and 'accepts' lists every valid shape with a 'format' and a concrete 'example' (the API rejects inputs matching none of them). Each row also carries 'options' (the typed parameters that service accepts) and 'offers' (the implementations behind it, in failover order, cheapest first, each with its price per record and batch cap). Use the 'service' value with the run tool. Filter with 'platform' and/or 'service' to keep the output small.",
       inputSchema: {
         platform: z
           .enum(platforms as [Platform, ...Platform[]])
           .optional()
           .describe("Filter by platform."),
-        type: z
-          .enum(types as [string, ...string[]])
+        service: z
+          .enum(names as [string, ...string[]])
           .optional()
-          .describe("Filter by service type (e.g. 'profile.info')."),
+          .describe("Filter by service name (e.g. 'profile.info')."),
       },
     },
-    async ({ platform, type }: { platform?: Platform; type?: string }) =>
-      ok((await snap()).services({ platform, type })),
+    async ({ platform, service }: { platform?: Platform; service?: string }) =>
+      ok((await snap()).services({ platform, service })),
   );
 
   server.registerTool(
-    "extract",
+    "run",
     {
-      title: "Extract social data from URLs",
+      title: "Run a SocialRouter service",
       description:
-        `Extract data from social media URLs. 'service' is a '<provider>/<platform>/<type>' slug — pick one from list_services whose platform matches the URLs and whose type matches the data you want (e.g. a LinkedIn profile URL + 'profile.info' for profile data). All URLs in one call must belong to the service's platform. Each service documents the exact URL shape(s) it accepts in list_services ('input.accepts', each entry with a format and a concrete example) — the API rejects non-matching URLs before any credits are spent, so never guess or reconstruct a URL: pass it exactly as the user provided it, or check list_services for the expected format first. Platforms: ${platforms.join(", ")}.`,
+        `Fetch social data by running one service. 'service' is a '<platform>/<service>' slug — pick one from list_services whose platform matches your input and whose name matches the data you want (e.g. a LinkedIn profile URL + 'linkedin/profile.info'). 'inputs' are URLs for a url-kind service and free-text queries for a query-kind one; list_services says which, and documents the accepted URL shapes with concrete examples. Never guess or reconstruct a URL: pass it exactly as the user provided it, or check list_services first — the API rejects a non-matching URL before any credits are spent. All inputs in one call must belong to the service's platform. By default the router picks the offer and falls over to the next one on failure; the response's 'served_by' says which offer answered. Platforms: ${platforms.join(", ")}.`,
       inputSchema: {
-        urls: z
+        service: slugSchema(startup.slugs()).describe(
+          "Service slug from list_services (e.g. 'reddit/subreddit.posts').",
+        ),
+        inputs: z
           .array(z.string())
           .nonempty()
           .describe(
-            "One or more URLs, all on the service's platform, each matching one of the service's accepted input formats from list_services (e.g. profile.info on linkedin wants 'https://www.linkedin.com/in/<handle>'). Pass URLs verbatim — do not guess their shape.",
+            "URLs (url-kind services) or search queries (query-kind services), all for the service's platform. Pass URLs verbatim — do not guess their shape.",
           ),
-        service: slugSchema(startup.slugs("extract")).describe(
-          "Service slug from list_services (e.g. 'brightdata/linkedin/profile.info').",
-        ),
-        ...commonParams,
-      },
-    },
-    async ({ urls, service, ...args }: { urls: string[]; service: string } & RunArgs) =>
-      run("extract", service, urls, args),
-  );
-
-  server.registerTool(
-    "search",
-    {
-      title: "Search by text query",
-      description:
-        "Run a query-driven search (no URL needed). 'service' is a '<provider>/<platform>/<type>' slug whose type ends in '.search' — pick one from list_services.",
-      inputSchema: {
-        queries: z
-          .array(z.string())
-          .nonempty()
+        provider: z
+          .string()
+          .optional()
           .describe(
-            "Search terms, or URLs that pin the search context. See 'input.example' in list_services for what a good query looks like.",
+            "Pin one offer, e.g. 'apify/harshmaur' (see 'offers' in list_services). Advanced — omit it so the router picks and fails over; pinning disables failover.",
           ),
-        service: slugSchema(startup.slugs("search")).describe(
-          "Search service slug from list_services (e.g. 'apify/googlemaps/place.search').",
-        ),
-        ...commonParams,
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Maximum number of records to return (default 100, max 250)."),
+        options: z
+          .record(z.string(), z.unknown())
+          .optional()
+          .describe(
+            "Typed options declared by the service — see 'options' in list_services for the exact names, types and allowed values (e.g. {\"sort\": \"top\"} on reddit/subreddit.posts). Unknown keys are rejected with a corrective error, not ignored.",
+          ),
       },
     },
-    async ({ queries, service, ...args }: { queries: string[]; service: string } & RunArgs) =>
-      run("search", service, queries, args),
+    async ({
+      service,
+      inputs,
+      ...args
+    }: { service: string; inputs: string[] } & RunArgs) => {
+      const check = checkService(await snap(), service, inputs.length, args.provider);
+      if (!("row" in check)) return err(check.error);
+      const result = await runService(service, {
+        ...(check.row.input_kind === "query" ? { queries: inputs } : { urls: inputs }),
+        ...(args.provider ? { provider: args.provider as `${string}/${string}` } : {}),
+        ...(args.limit !== undefined ? { limit: args.limit } : {}),
+        ...(args.options ? { options: args.options } : {}),
+      });
+      // Result records hold scraped third-party text — mark it untrusted.
+      return okUntrusted(result);
+    },
   );
 
   server.registerTool(
     "get_extraction",
     {
-      title: "Get extraction or search by ID",
+      title: "Get a past run by ID",
       description:
-        "Retrieve a previous extraction or search by its ID. Works for both extract and search results.",
+        "Retrieve the result of a previous run by its ID, whatever service produced it.",
       inputSchema: {
         id: z.string().describe("The extraction ID (e.g., ext_abc123)."),
       },
@@ -229,7 +194,7 @@ function registerTools(startup: CatalogSnapshot) {
     {
       title: "Get account balance and usage",
       description:
-        "Get your SocialRouter credit balance and a usage summary over the last N days, broken down by provider and platform.",
+        "Get your SocialRouter credit balance and a usage summary over the last N days, broken down by offer and platform.",
       inputSchema: {
         days: z
           .number()

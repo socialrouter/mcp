@@ -2,20 +2,13 @@ import type { Platform } from "@socialrouter/sdk";
 
 const CATALOG_TTL_MS = 5 * 60_000;
 
-// Shape of GET /v1/providers (public endpoint, no auth). Only the fields we
-// consume are declared; unknown fields are ignored.
-interface RawPricingRow {
-  type: string;
-  platforms: Platform[];
-  price_per_record: number;
-  max_urls?: number;
-  max_queries?: number;
-  /** Actor variants — not exposed by the API yet, picked up when it is. */
-  variants?: string[];
-}
+// Shape of GET /v1/services (public endpoint, no auth): the service-first
+// catalogue, one entry per callable (platform, service) with its offers in
+// failover order. Only the fields we consume are declared; unknown fields
+// are ignored.
 
 /** One accepted input shape of a service. */
-export interface ServiceInputFormat {
+export interface InputFormat {
   /** Canonical shape, e.g. "https://www.linkedin.com/in/<handle>". */
   format: string;
   /** A concrete valid input. */
@@ -25,100 +18,90 @@ export interface ServiceInputFormat {
   note?: string;
 }
 
-/** Expected input of a service. An input may match any `accepts` entry. */
-export interface ServiceInputSpec {
-  kind: "url" | "query";
-  accepts: ServiceInputFormat[];
-}
-
-interface RawInputSpec extends ServiceInputSpec {
-  platform: Platform;
-  type: string;
-}
-
-interface RawProvider {
-  id: string;
+/** One typed option a service accepts. */
+export interface ServiceOption {
   name: string;
-  status: string;
-  supported_platforms: Platform[];
-  pricing: RawPricingRow[];
-  search_pricing?: RawPricingRow[];
-  /** Absent on API versions that predate input-format metadata. */
-  input_specs?: RawInputSpec[];
+  type: "string" | "number" | "boolean" | "enum";
+  values?: string[];
+  format?: string;
+  description: string;
+  default?: string | number | boolean;
 }
 
-export type ServiceKind = "extract" | "search";
-
-/** One callable service: a (provider, platform, type) combo live right now. */
-export interface ServiceRow {
-  /** Slug passed as `service` to the extract/search tools. */
-  service: string;
-  kind: ServiceKind;
-  platform: Platform;
-  type: string;
-  provider: string;
-  status: string;
+/** One offer of a service: a source's concrete implementation of it. */
+export interface CatalogueOffer {
+  /** Public offer id, e.g. "apify/harshmaur". */
+  offer: string;
+  source: string;
   price_per_record: number;
-  /** Max URLs (extract) or queries (search) accepted per request. */
-  max_batch: number;
-  variants?: string[];
-  /**
-   * Expected input format(s) for this service, as advertised by the API.
-   * Display-only: the API is the validation authority and returns the
-   * corrective error itself. Absent when the API doesn't advertise one.
-   */
-  input?: ServiceInputSpec;
+  /** Max inputs this offer accepts per request. */
+  max_inputs: number;
 }
 
-function usable(status: string): boolean {
-  return status === "active" || status === "degraded";
+interface RawService {
+  platform: Platform;
+  service: string;
+  endpoint: string;
+  input_kind: "url" | "query";
+  input_field: "urls" | "queries";
+  accepts: InputFormat[];
+  options: ServiceOption[];
+  offers: CatalogueOffer[];
+}
+
+/** One callable service, as surfaced to the agent. */
+export interface ServiceRow {
+  /** Slug passed as `service` to the run tool, e.g. "reddit/subreddit.posts". */
+  service: string;
+  platform: Platform;
+  /** The service half of the slug, e.g. "subreddit.posts". */
+  name: string;
+  /** What the service consumes: a URL per record, or a free-text query. */
+  input_kind: "url" | "query";
+  /**
+   * Accepted input shape(s). Display-only: the API is the validation
+   * authority and returns the corrective error itself.
+   */
+  accepts: InputFormat[];
+  /** Typed options this service takes. Empty when none. */
+  options: ServiceOption[];
+  /** Offers in failover order — the head serves unless one is pinned. */
+  offers: CatalogueOffer[];
+  /** Cheapest offer price per record. */
+  price_from: number;
+  /** Largest batch any offer of this service accepts. */
+  max_inputs: number;
 }
 
 export class CatalogSnapshot {
   private rows: ServiceRow[] = [];
 
-  constructor(raw: RawProvider[]) {
-    for (const p of raw) {
-      if (!usable(p.status)) continue;
-      const specByCombo = new Map<string, ServiceInputSpec>();
-      for (const s of p.input_specs ?? []) {
-        const { platform, type, ...spec } = s;
-        specByCombo.set(`${platform}|${type}`, spec);
-      }
-      const push = (row: RawPricingRow, kind: ServiceKind) => {
-        for (const platform of row.platforms) {
-          const input = specByCombo.get(`${platform}|${row.type}`);
-          this.rows.push({
-            service: `${p.id}/${platform}/${row.type}`,
-            kind,
-            platform,
-            type: row.type,
-            provider: p.id,
-            status: p.status,
-            price_per_record: row.price_per_record,
-            max_batch: row.max_urls ?? row.max_queries ?? 1,
-            ...(row.variants?.length ? { variants: row.variants } : {}),
-            ...(input ? { input } : {}),
-          });
-        }
-      };
-      for (const row of p.pricing) push(row, "extract");
-      for (const row of p.search_pricing ?? []) push(row, "search");
+  constructor(raw: RawService[]) {
+    for (const s of raw) {
+      if (!s.offers?.length) continue;
+      this.rows.push({
+        service: `${s.platform}/${s.service}`,
+        platform: s.platform,
+        name: s.service,
+        input_kind: s.input_kind,
+        accepts: s.accepts ?? [],
+        options: s.options ?? [],
+        offers: s.offers,
+        price_from: Math.min(...s.offers.map((o) => o.price_per_record)),
+        max_inputs: Math.max(...s.offers.map((o) => o.max_inputs)),
+      });
     }
-    // Stable, scannable ordering: platform, then type, then cheapest first.
+    // Stable, scannable ordering: platform, then service name.
     this.rows.sort(
-      (a, b) =>
-        a.platform.localeCompare(b.platform) ||
-        a.type.localeCompare(b.type) ||
-        a.price_per_record - b.price_per_record,
+      (a, b) => a.platform.localeCompare(b.platform) || a.name.localeCompare(b.name),
     );
   }
 
-  services(filter?: { platform?: string; type?: string }): ServiceRow[] {
+  services(filter?: { platform?: string; service?: string }): ServiceRow[] {
     return this.rows.filter(
       (r) =>
         (!filter?.platform || r.platform === filter.platform) &&
-        (!filter?.type || r.type === filter.type),
+        (!filter?.service || r.name === filter.service),
     );
   }
 
@@ -126,43 +109,41 @@ export class CatalogSnapshot {
     return this.rows.find((r) => r.service === service);
   }
 
-  slugs(kind: ServiceKind): string[] {
-    return this.rows.filter((r) => r.kind === kind).map((r) => r.service);
+  slugs(): string[] {
+    return this.rows.map((r) => r.service);
   }
 
   platforms(): Platform[] {
     return [...new Set(this.rows.map((r) => r.platform))].sort();
   }
 
-  types(): string[] {
-    return [...new Set(this.rows.map((r) => r.type))].sort();
+  /** Distinct service names across platforms, for the list filter. */
+  names(): string[] {
+    return [...new Set(this.rows.map((r) => r.name))].sort();
   }
 }
 
 export type ServiceCheck = { row: ServiceRow; error?: never } | { error: string };
 
 /**
- * Validate a service slug against the catalog before spending an API
- * round-trip: the slug must exist (a `:variant` suffix is ignored for the
- * lookup), belong to the right kind of tool, and accept the batch size.
- * Errors are corrective — they list the closest valid alternatives.
+ * Validate a run against the catalog before spending an API round-trip: the
+ * service must exist, the pinned offer (if any) must serve it, and the batch
+ * must fit. Errors are corrective — they name the valid alternatives, since
+ * the reader is an agent that has to fix its own call.
  */
 export function checkService(
   snap: CatalogSnapshot,
-  kind: ServiceKind,
   service: string,
-  batchSize: number,
+  inputCount: number,
+  provider?: string,
 ): ServiceCheck {
-  const base = service.split(":")[0];
-  const row = snap.find(base);
+  const row = snap.find(service);
   if (!row) {
-    const [, platform, type] = base.split("/");
-    const sameCombo = snap.services({ platform, type });
+    const [platform] = service.split("/");
     const samePlatform = snap.services({ platform });
-    const suggestions = (sameCombo.length ? sameCombo : samePlatform)
-      .filter((r) => r.kind === kind)
+    const suggestions = (samePlatform.length ? samePlatform : snap.services())
       .map((r) => r.service)
-      .slice(0, 8);
+      .slice(0, 12);
     return {
       error:
         `Unknown service "${service}".` +
@@ -171,25 +152,41 @@ export function checkService(
           : " Call list_services to see what is available."),
     };
   }
-  if (row.kind !== kind) {
-    return {
-      error: `"${base}" is a ${row.kind} service — call the "${row.kind}" tool instead.`,
-    };
+
+  if (provider) {
+    const offer = row.offers.find((o) => o.offer === provider);
+    if (!offer) {
+      return {
+        error:
+          `Offer "${provider}" does not serve "${service}". Offers: ${row.offers
+            .map((o) => o.offer)
+            .join(", ")}. Omit 'provider' to let the router pick and fail over.`,
+      };
+    }
+    if (inputCount > offer.max_inputs) {
+      const unit = row.input_kind === "query" ? "queries" : "URLs";
+      return {
+        error:
+          `Offer "${provider}" accepts at most ${offer.max_inputs} ${unit} per request; received ${inputCount}. ` +
+          "Send smaller batches, or omit 'provider' so the router picks an offer with a large enough cap.",
+      };
+    }
+    return { row };
   }
-  if (batchSize > row.max_batch) {
-    const one = kind === "search" ? "query" : "URL";
-    const many = kind === "search" ? "queries" : "URLs";
+
+  if (inputCount > row.max_inputs) {
+    const unit = row.input_kind === "query" ? "queries" : "URLs";
     return {
       error:
-        `"${base}" accepts at most ${row.max_batch} ${row.max_batch === 1 ? one : many} per request; received ${batchSize}. ` +
-        "Send smaller batches or pick a provider with a higher cap (see list_services).",
+        `"${service}" accepts at most ${row.max_inputs} ${unit} per request; received ${inputCount}. ` +
+        "Send smaller batches.",
     };
   }
   return { row };
 }
 
 /**
- * TTL-cached provider catalog. Fetched once at startup (the server refuses to
+ * TTL-cached service catalog. Fetched once at startup (the server refuses to
  * boot without it — no catalog means the API itself is unreachable) and
  * refreshed lazily afterwards; on refresh failure the stale snapshot is
  * served.
@@ -213,9 +210,9 @@ export class CatalogCache {
 
   private async refresh(): Promise<CatalogSnapshot | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/v1/providers`);
+      const res = await fetch(`${this.baseUrl}/v1/services`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = (await res.json()) as { data?: RawProvider[] };
+      const json = (await res.json()) as { data?: RawService[] };
       if (!Array.isArray(json.data)) throw new Error("unexpected payload");
       this.snapshot = new CatalogSnapshot(json.data);
       this.fetchedAt = Date.now();

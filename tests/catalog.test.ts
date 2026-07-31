@@ -5,142 +5,107 @@ import { makeSnapshot, RAW_CATALOG } from "./fixtures.js";
 describe("CatalogSnapshot", () => {
   const snap = makeSnapshot();
 
-  it("flattens the catalog into one row per (provider, platform, type)", () => {
-    const row = snap.find("brightdata/linkedin/profile.info");
+  it("flattens the catalogue into one row per (platform, service)", () => {
+    const row = snap.find("reddit/subreddit.posts");
     expect(row).toMatchObject({
-      service: "brightdata/linkedin/profile.info",
-      kind: "extract",
-      platform: "linkedin",
-      type: "profile.info",
-      provider: "brightdata",
-      status: "active",
-      price_per_record: 0.001725,
-      max_batch: 1000,
+      service: "reddit/subreddit.posts",
+      platform: "reddit",
+      name: "subreddit.posts",
+      input_kind: "url",
+      price_from: 0.002,
+      max_inputs: 100, // the largest cap across offers
     });
+    expect(row?.offers.map((o) => o.offer)).toEqual(["apify/harshmaur", "apify/trudax"]);
   });
 
-  it("excludes non-usable providers", () => {
-    expect(snap.find("downprov/linkedin/profile.info")).toBeUndefined();
-    expect(snap.services().map((r) => r.provider)).not.toContain("downprov");
+  it("excludes services no offer serves", () => {
+    expect(snap.find("instagram/profile.info")).toBeUndefined();
+    expect(snap.slugs()).not.toContain("instagram/profile.info");
   });
 
-  it("includes degraded providers", () => {
-    const degraded = makeSnapshot([{ ...RAW_CATALOG[0], status: "degraded" }]);
-    expect(degraded.find("apify/linkedin/profile.info")?.status).toBe("degraded");
+  it("keeps the offers in the order the API sent them (failover order)", () => {
+    const row = snap.find("linkedin/profile.info");
+    expect(row?.offers[0].offer).toBe("brightdata/linkedin");
+    expect(row?.price_from).toBe(0.001725);
   });
 
-  it("sorts rows by platform, type, then cheapest first", () => {
-    const linkedinProfile = snap.services({
-      platform: "linkedin",
-      type: "profile.info",
-    });
-    expect(linkedinProfile.map((r) => r.provider)).toEqual(["brightdata", "apify"]);
-  });
-
-  it("filters services by platform and type", () => {
-    expect(snap.services({ platform: "youtube" }).every((r) => r.platform === "youtube")).toBe(true);
-    expect(snap.services({ type: "profile.info" }).map((r) => r.service)).toEqual([
-      "brightdata/instagram/profile.info",
-      "brightdata/linkedin/profile.info",
-      "apify/linkedin/profile.info",
+  it("sorts rows by platform then service name", () => {
+    expect(snap.services().map((r) => r.service)).toEqual([
+      "googlemaps/place.search",
+      "linkedin/profile.info",
+      "reddit/subreddit.posts",
+      "youtube/channel.info",
     ]);
   });
 
-  it("separates search slugs from extract slugs", () => {
-    expect(snap.slugs("search")).toEqual(["apify/googlemaps/place.search"]);
-    expect(snap.slugs("extract")).not.toContain("apify/googlemaps/place.search");
-    expect(snap.find("apify/googlemaps/place.search")?.max_batch).toBe(100); // from max_queries
+  it("filters services by platform and by service name", () => {
+    expect(snap.services({ platform: "youtube" }).every((r) => r.platform === "youtube")).toBe(true);
+    expect(snap.services({ service: "profile.info" }).map((r) => r.service)).toEqual([
+      "linkedin/profile.info",
+    ]);
   });
 
-  it("lists distinct platforms and types", () => {
-    expect(snap.platforms()).toContain("googlemaps");
-    expect(snap.types()).toContain("place.search");
-  });
-
-  it("attaches the advertised input spec to matching rows", () => {
-    const row = snap.find("brightdata/linkedin/profile.info");
-    expect(row?.input).toMatchObject({
-      kind: "url",
-      accepts: [
-        {
-          format: "https://www.linkedin.com/in/<handle>",
-          example: "https://www.linkedin.com/in/amili",
-        },
-      ],
-    });
-    // No spec advertised for this combo → no input metadata on the row.
-    expect(snap.find("brightdata/instagram/profile.info")?.input).toBeUndefined();
-  });
-
-  it("passes variants through when present", () => {
-    const withVariants = makeSnapshot([
+  it("carries the input kind, accepted shapes and typed options", () => {
+    const row = snap.find("linkedin/profile.info");
+    expect(row?.accepts).toMatchObject([
       {
-        ...RAW_CATALOG[0],
-        pricing: [
-          {
-            type: "profile.info",
-            platforms: ["linkedin"],
-            price_per_record: 0.0069,
-            max_urls: 1,
-            variants: ["apimaestro"],
-          },
-        ],
+        format: "https://www.linkedin.com/in/<handle>",
+        example: "https://www.linkedin.com/in/amili",
       },
     ]);
-    expect(withVariants.find("apify/linkedin/profile.info")?.variants).toEqual([
-      "apimaestro",
-    ]);
+    expect(row?.options.map((o) => o.name)).toEqual(["includeEmail"]);
+    expect(snap.find("googlemaps/place.search")?.input_kind).toBe("query");
+  });
+
+  it("lists distinct platforms and service names", () => {
+    expect(snap.platforms()).toEqual(["googlemaps", "linkedin", "reddit", "youtube"]);
+    expect(snap.names()).toContain("place.search");
   });
 });
 
 describe("checkService", () => {
   const snap = makeSnapshot();
 
-  it("accepts a valid slug within the batch cap", () => {
-    const check = checkService(snap, "extract", "brightdata/linkedin/profile.info", 3);
+  it("accepts a valid service within the batch cap", () => {
+    const check = checkService(snap, "linkedin/profile.info", 3);
     expect(check.error).toBeUndefined();
-    expect("row" in check && check.row.provider).toBe("brightdata");
+    expect("row" in check && check.row.platform).toBe("linkedin");
   });
 
-  it("ignores a :variant suffix for the lookup", () => {
-    const check = checkService(
-      snap,
-      "extract",
-      "apify/linkedin/profile.info:apimaestro",
-      1,
-    );
-    expect(check.error).toBeUndefined();
+  it("suggests the platform's services on an unknown service", () => {
+    const check = checkService(snap, "reddit/group.posts", 1);
+    expect(check.error).toContain("reddit/subreddit.posts");
   });
 
-  it("suggests other providers of the same platform/type on unknown slug", () => {
-    const check = checkService(snap, "extract", "nope/linkedin/profile.info", 1);
-    expect(check.error).toContain("brightdata/linkedin/profile.info");
-    expect(check.error).toContain("apify/linkedin/profile.info");
+  it("falls back to the whole catalogue when the platform is unknown too", () => {
+    const check = checkService(snap, "nope/nope", 1);
+    expect(check.error).toContain("linkedin/profile.info");
   });
 
-  it("falls back to same-platform suggestions when the type is unknown", () => {
-    const check = checkService(snap, "extract", "apify/youtube/nope.info", 1);
-    expect(check.error).toContain("apify/youtube/channel.info");
+  it("enforces the largest offer cap when the router is free to pick", () => {
+    // trudax caps at 10 but harshmaur takes 100 — 50 URLs is fine, the
+    // router just drops trudax from the chain.
+    expect(checkService(snap, "reddit/subreddit.posts", 50).error).toBeUndefined();
+    const tooMany = checkService(snap, "reddit/subreddit.posts", 500);
+    expect(tooMany.error).toContain("at most 100 URLs");
+    expect(tooMany.error).toContain("received 500");
   });
 
-  it("points to list_services when nothing matches", () => {
-    const check = checkService(snap, "extract", "nope/nope/nope", 1);
-    expect(check.error).toContain("list_services");
+  it("enforces the pinned offer's own cap", () => {
+    const check = checkService(snap, "reddit/subreddit.posts", 50, "apify/trudax");
+    expect(check.error).toContain("at most 10 URLs");
+    expect(check.error).toContain("omit 'provider'");
   });
 
-  it("rejects a search slug passed to extract, and vice versa", () => {
-    expect(
-      checkService(snap, "extract", "apify/googlemaps/place.search", 1).error,
-    ).toContain('call the "search" tool');
-    expect(
-      checkService(snap, "search", "brightdata/linkedin/profile.info", 1).error,
-    ).toContain('call the "extract" tool');
+  it("rejects an offer that does not serve the service", () => {
+    const check = checkService(snap, "reddit/subreddit.posts", 1, "brightdata/reddit");
+    expect(check.error).toContain("does not serve");
+    expect(check.error).toContain("apify/harshmaur");
   });
 
-  it("enforces the provider batch cap before the API call", () => {
-    const check = checkService(snap, "extract", "apify/linkedin/profile.info", 2);
-    expect(check.error).toContain("at most 1 URL");
-    expect(check.error).toContain("received 2");
+  it("names the right unit for query-kind services", () => {
+    const check = checkService(snap, "googlemaps/place.search", 500);
+    expect(check.error).toContain("at most 100 queries");
   });
 });
 
@@ -170,7 +135,7 @@ describe("CatalogCache", () => {
     const count = stubFetch([okResponse]);
     const cache = new CatalogCache("https://api.test");
     const first = await cache.get();
-    expect(first?.find("apify/linkedin/profile.info")).toBeDefined();
+    expect(first?.find("reddit/subreddit.posts")).toBeDefined();
     await cache.get();
     await cache.get();
     expect(count()).toBe(1);
