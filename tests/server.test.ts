@@ -113,7 +113,7 @@ describe("MCP server wiring", () => {
   // The v0.7.0 regression: this call reached the SDK and threw before any
   // request left the process.
   it("run reaches the API through the SDK and returns the extraction", async () => {
-    stubFetch({ "/v1/reddit/subreddit.posts": EXTRACTION });
+    stubFetch({ "/v1/extract/reddit/subreddit.posts": EXTRACTION });
     const result = await (await connect()).callTool({
       name: "run",
       arguments: {
@@ -126,13 +126,13 @@ describe("MCP server wiring", () => {
     expect(payload(result as never)).toMatchObject({ id: "ext_123", served_by: "apify/harshmaur" });
 
     const post = calls.find((c) => c.method === "POST")!;
-    expect(post.url).toBe("/v1/reddit/subreddit.posts");
+    expect(post.url).toBe("/v1/extract/reddit/subreddit.posts");
     expect(post.body).toEqual({ urls: ["https://www.reddit.com/r/programming"] });
     expect(post.headers.Authorization).toBe("Bearer sr_test_key");
   });
 
   it("sends queries, not urls, for a query-kind service", async () => {
-    stubFetch({ "/v1/googlemaps/place.search": EXTRACTION });
+    stubFetch({ "/v1/extract/googlemaps/place.search": EXTRACTION });
     await (await connect()).callTool({
       name: "run",
       arguments: { service: "googlemaps/place.search", inputs: ["best pizza in Brooklyn"] },
@@ -143,7 +143,7 @@ describe("MCP server wiring", () => {
   });
 
   it("forwards provider, limit and options untouched", async () => {
-    stubFetch({ "/v1/reddit/subreddit.posts": EXTRACTION });
+    stubFetch({ "/v1/extract/reddit/subreddit.posts": EXTRACTION });
     await (await connect()).callTool({
       name: "run",
       arguments: {
@@ -165,7 +165,7 @@ describe("MCP server wiring", () => {
   });
 
   it("marks run results as untrusted third-party content", async () => {
-    stubFetch({ "/v1/reddit/subreddit.posts": EXTRACTION });
+    stubFetch({ "/v1/extract/reddit/subreddit.posts": EXTRACTION });
     const result = await (await connect()).callTool({
       name: "run",
       arguments: {
@@ -201,7 +201,7 @@ describe("MCP server wiring", () => {
     const text = (result.content as { text: string }[])[0].text;
     // A wiring bug reads off undefined; a real API error names the failure.
     expect(text).not.toContain("Cannot read properties of undefined");
-    expect(text).toContain("no stub for /v1/reddit/subreddit.posts");
+    expect(text).toContain("no stub for /v1/extract/reddit/subreddit.posts");
   });
 
   it("get_extraction fetches by id and marks the result untrusted", async () => {
