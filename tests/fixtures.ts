@@ -10,7 +10,7 @@ export const RAW_CATALOG = [
   {
     platform: "linkedin",
     service: "profile.info",
-    endpoint: "/v1/linkedin/profile.info",
+    endpoint: "/v1/extract/linkedin/profile.info",
     input_kind: "url",
     input_field: "urls",
     accepts: [
@@ -36,7 +36,7 @@ export const RAW_CATALOG = [
   {
     platform: "reddit",
     service: "subreddit.posts",
-    endpoint: "/v1/reddit/subreddit.posts",
+    endpoint: "/v1/extract/reddit/subreddit.posts",
     input_kind: "url",
     input_field: "urls",
     accepts: [
@@ -62,7 +62,7 @@ export const RAW_CATALOG = [
   {
     platform: "youtube",
     service: "channel.info",
-    endpoint: "/v1/youtube/channel.info",
+    endpoint: "/v1/extract/youtube/channel.info",
     input_kind: "url",
     input_field: "urls",
     accepts: [
@@ -80,7 +80,7 @@ export const RAW_CATALOG = [
   {
     platform: "googlemaps",
     service: "place.search",
-    endpoint: "/v1/googlemaps/place.search",
+    endpoint: "/v1/extract/googlemaps/place.search",
     input_kind: "query",
     input_field: "queries",
     accepts: [
@@ -95,7 +95,7 @@ export const RAW_CATALOG = [
     // Declared but served by nobody: must never surface as callable.
     platform: "instagram",
     service: "profile.info",
-    endpoint: "/v1/instagram/profile.info",
+    endpoint: "/v1/extract/instagram/profile.info",
     input_kind: "url",
     input_field: "urls",
     accepts: [],
