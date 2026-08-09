@@ -1,0 +1,68 @@
+{
+  "envelope": [
+    "data"
+  ],
+  "service": {
+    "always": [
+      "accepts",
+      "endpoint",
+      "input_field",
+      "input_kind",
+      "offers",
+      "options",
+      "platform",
+      "service"
+    ],
+    "sometimes": []
+  },
+  "offer": {
+    "always": [
+      "max_inputs",
+      "offer",
+      "price_per_record",
+      "requires_own_key",
+      "source"
+    ],
+    "sometimes": []
+  },
+  "accepts": {
+    "always": [
+      "example",
+      "format"
+    ],
+    "sometimes": [
+      "note",
+      "offers",
+      "pattern"
+    ]
+  },
+  "option": {
+    "always": [
+      "description",
+      "name",
+      "type"
+    ],
+    "sometimes": [
+      "default",
+      "format",
+      "offers",
+      "values"
+    ]
+  },
+  "input_kind": [
+    "identifier",
+    "query",
+    "url"
+  ],
+  "input_field": [
+    "identifiers",
+    "queries",
+    "urls"
+  ],
+  "option_type": [
+    "boolean",
+    "enum",
+    "number",
+    "string"
+  ]
+}

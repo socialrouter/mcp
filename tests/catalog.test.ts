@@ -36,9 +36,19 @@ describe("CatalogSnapshot", () => {
       "googlemaps/place.search",
       "linkedin/profile.info",
       "person/info",
+      // The fixture sends user.posts first; within a subject the name decides.
       "reddit/subreddit.posts",
+      "reddit/user.posts",
       "youtube/channel.info",
     ]);
+  });
+
+  it("defaults the shapes and options the API leaves out", () => {
+    // A service declaring neither comes back without the keys at all; the row
+    // must still expose arrays, since list_services renders them straight.
+    const row = snap.find("reddit/user.posts");
+    expect(row?.accepts).toEqual([]);
+    expect(row?.options).toEqual([]);
   });
 
   it("filters services by platform and by service name", () => {

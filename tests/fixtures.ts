@@ -60,6 +60,21 @@ export const RAW_CATALOG = [
     ],
   },
   {
+    // Second service on a platform that already has one, and listed here out
+    // of alphabetical order: without it nothing exercises the tie-break on
+    // service name. `accepts` and `options` are absent rather than empty —
+    // the API omits them on a service that declares neither, and the snapshot
+    // has to default them instead of handing the agent `undefined`.
+    platform: "reddit",
+    service: "user.posts",
+    endpoint: "/v1/extract/reddit/user.posts",
+    input_kind: "url",
+    input_field: "urls",
+    offers: [
+      { offer: "apify/trudax", source: "apify", price_per_record: 0.0035, max_inputs: 10, requires_own_key: false },
+    ],
+  },
+  {
     platform: "youtube",
     service: "channel.info",
     endpoint: "/v1/extract/youtube/channel.info",

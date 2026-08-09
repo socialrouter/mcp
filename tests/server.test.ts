@@ -37,8 +37,14 @@ interface FetchCall {
 
 let calls: FetchCall[];
 
-/** Route by path: the catalogue plus whatever the test needs on top. */
-function stubFetch(routes: Record<string, unknown> = {}) {
+/**
+ * Route by path: the catalogue plus whatever the test needs on top.
+ *
+ * `catalogDown` models the API dropping the catalogue while the server is
+ * already up — the per-call refresh fails and the handler has to fall back on
+ * the snapshot it booted with.
+ */
+function stubFetch(routes: Record<string, unknown> = {}, catalogDown = false) {
   vi.stubGlobal("fetch", (url: string, init: RequestInit = {}) => {
     const path = url.replace(BASE, "");
     calls.push({
@@ -49,7 +55,9 @@ function stubFetch(routes: Record<string, unknown> = {}) {
     });
 
     if (path === "/v1/services") {
-      return Promise.resolve(new Response(JSON.stringify({ data: RAW_CATALOG }), { status: 200 }));
+      return catalogDown
+        ? Promise.reject(new Error("network down"))
+        : Promise.resolve(new Response(JSON.stringify({ data: RAW_CATALOG }), { status: 200 }));
     }
     const match = Object.keys(routes).find((r) => path.startsWith(r));
     if (match) {
@@ -380,7 +388,122 @@ describe("MCP server wiring", () => {
       arguments: { platform: "reddit" },
     });
 
-    expect(payload(result as never)).toMatchObject([{ service: "reddit/subreddit.posts" }]);
+    expect(payload(result as never)).toMatchObject([
+      { service: "reddit/subreddit.posts" },
+      { service: "reddit/user.posts" },
+    ]);
     expect(calls.every((c) => c.method === "GET")).toBe(true);
+  });
+
+  it("list_services lists every callable service, and only those", async () => {
+    // instagram/profile.info is declared in the fixture with no offer: nothing
+    // serves it, so offering it to the agent would be an invitation to a 4xx.
+    stubFetch();
+    const result = await (await connect()).callTool({ name: "list_services", arguments: {} });
+
+    const slugs = (payload(result as never) as { service: string }[]).map((r) => r.service);
+    expect(slugs).toEqual([
+      "googlemaps/place.search",
+      "linkedin/profile.info",
+      "person/info",
+      "reddit/subreddit.posts",
+      "reddit/user.posts",
+      "youtube/channel.info",
+    ]);
+  });
+
+  it("list_services filters by service name across subjects", async () => {
+    stubFetch();
+    const result = await (await connect()).callTool({
+      name: "list_services",
+      arguments: { service: "profile.info" },
+    });
+
+    // linkedin's is served, instagram's is not — the filter must not resurrect it.
+    expect((payload(result as never) as { service: string }[]).map((r) => r.service)).toEqual([
+      "linkedin/profile.info",
+    ]);
+  });
+
+  /*
+   * A BYOK offer bills nothing through SocialRouter, so it sorts as the
+   * cheapest thing on the row — exactly what an agent told to save money will
+   * pin. Without `requires_own_key` reaching it, the only signal it gets is
+   * `price_per_record: 0`, and the call fails at run time on an account with
+   * no key for that source. The flag reaches the agent today only because the
+   * offers are passed through by reference; this fails the day a `.map()`
+   * normalises them and quietly drops it.
+   */
+  it("surfaces requires_own_key on the offers it lists", async () => {
+    stubFetch();
+    const result = await (await connect()).callTool({
+      name: "list_services",
+      arguments: { platform: "person" },
+    });
+
+    expect(payload(result as never)).toMatchObject([
+      {
+        service: "person/info",
+        offers: [{ offer: "apollo/person", price_per_record: 0, requires_own_key: true }],
+      },
+    ]);
+  });
+
+  /*
+   * The catalogue is re-read on every call, so a refresh that fails must not
+   * take the tools down with it: the server keeps validating against the
+   * snapshot it booted with. Without the `?? startup` fallback the API being
+   * briefly unreachable would turn every run into a validation error.
+   */
+  it("keeps serving from the startup catalogue when a refresh fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    stubFetch({ "/v1/extract/reddit/subreddit.posts": EXTRACTION }, true);
+
+    const result = await (await connect()).callTool({
+      name: "run",
+      arguments: {
+        service: "reddit/subreddit.posts",
+        inputs: ["https://www.reddit.com/r/programming"],
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(calls.some((c) => c.url === "/v1/extract/reddit/subreddit.posts")).toBe(true);
+  });
+
+  /*
+   * The one case where the hand-written "Unknown service" message in
+   * catalog.ts answers instead of the zod enum: with no slug to enumerate,
+   * `slugSchema` degrades to a free string and validation falls through to
+   * checkService, which has no suggestions to offer either. The agent must
+   * still be pointed somewhere rather than handed a bare rejection.
+   */
+  it("stays corrective when it has no catalogue to suggest from", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    stubFetch({}, true);
+
+    const result = await (await connect(makeSnapshot([]))).callTool({
+      name: "run",
+      arguments: { service: "reddit/subreddit.posts", inputs: ["https://www.reddit.com/r/x"] },
+    });
+
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0].text).toContain("list_services");
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  it("surfaces a failed get_extraction instead of returning an empty run", async () => {
+    // Nothing is stubbed for the id, so the API answers 500: the agent must
+    // be told, not handed a result-shaped object it will summarise as empty.
+    stubFetch();
+    const result = await (await connect()).callTool({
+      name: "get_extraction",
+      arguments: { id: "ext_unknown" },
+    });
+
+    expect(result.isError).toBe(true);
+    const text = (result.content as { text: string }[])[0].text;
+    expect(text).not.toBe(UNTRUSTED_NOTICE);
+    expect(text).toContain("ext_unknown");
   });
 });
