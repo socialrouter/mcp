@@ -1,4 +1,16 @@
-import type { Platform } from "@socialrouter/sdk";
+import type { InputKind, Subject } from "@socialrouter/sdk";
+
+/**
+ * What a batch cap counts, per input kind — used in the corrective messages
+ * an agent reads when it oversends. Exhaustive over `InputKind`, so a kind
+ * added upstream is a compile error rather than a message calling
+ * identifiers "URLs".
+ */
+const INPUT_UNIT: Record<InputKind, string> = {
+  url: "URLs",
+  query: "queries",
+  identifier: "identifiers",
+};
 
 const CATALOG_TTL_MS = 5 * 60_000;
 
@@ -39,11 +51,11 @@ export interface CatalogueOffer {
 }
 
 interface RawService {
-  platform: Platform;
+  platform: Subject;
   service: string;
   endpoint: string;
-  input_kind: "url" | "query";
-  input_field: "urls" | "queries";
+  input_kind: InputKind;
+  input_field: "urls" | "queries" | "identifiers";
   accepts: InputFormat[];
   options: ServiceOption[];
   offers: CatalogueOffer[];
@@ -53,11 +65,15 @@ interface RawService {
 export interface ServiceRow {
   /** Slug passed as `service` to the run tool, e.g. "reddit/subreddit.posts". */
   service: string;
-  platform: Platform;
+  /** The left key of the slug: a platform, or an enrichment entity. */
+  platform: Subject;
   /** The service half of the slug, e.g. "subreddit.posts". */
   name: string;
-  /** What the service consumes: a URL per record, or a free-text query. */
-  input_kind: "url" | "query";
+  /**
+   * What the service consumes: a URL per record, a free-text query, or an
+   * identifier of the entity (an email, a domain, a profile URL, an id).
+   */
+  input_kind: InputKind;
   /**
    * Accepted input shape(s). Display-only: the API is the validation
    * authority and returns the corrective error itself.
@@ -113,11 +129,12 @@ export class CatalogSnapshot {
     return this.rows.map((r) => r.service);
   }
 
-  platforms(): Platform[] {
+  /** Every subject with a callable service — platforms and entities alike. */
+  platforms(): Subject[] {
     return [...new Set(this.rows.map((r) => r.platform))].sort();
   }
 
-  /** Distinct service names across platforms, for the list filter. */
+  /** Distinct service names across subjects, for the list filter. */
   names(): string[] {
     return [...new Set(this.rows.map((r) => r.name))].sort();
   }
@@ -164,7 +181,7 @@ export function checkService(
       };
     }
     if (inputCount > offer.max_inputs) {
-      const unit = row.input_kind === "query" ? "queries" : "URLs";
+      const unit = INPUT_UNIT[row.input_kind];
       return {
         error:
           `Offer "${provider}" accepts at most ${offer.max_inputs} ${unit} per request; received ${inputCount}. ` +
@@ -175,7 +192,7 @@ export function checkService(
   }
 
   if (inputCount > row.max_inputs) {
-    const unit = row.input_kind === "query" ? "queries" : "URLs";
+    const unit = INPUT_UNIT[row.input_kind];
     return {
       error:
         `"${service}" accepts at most ${row.max_inputs} ${unit} per request; received ${inputCount}. ` +

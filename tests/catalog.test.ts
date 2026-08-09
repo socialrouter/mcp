@@ -29,10 +29,13 @@ describe("CatalogSnapshot", () => {
     expect(row?.price_from).toBe(0.001725);
   });
 
-  it("sorts rows by platform then service name", () => {
+  it("sorts rows by subject then service name, both namespaces in one list", () => {
+    // Flat across namespaces on purpose: this listing is where an agent
+    // discovers that person/info exists at all.
     expect(snap.services().map((r) => r.service)).toEqual([
       "googlemaps/place.search",
       "linkedin/profile.info",
+      "person/info",
       "reddit/subreddit.posts",
       "youtube/channel.info",
     ]);
@@ -58,7 +61,13 @@ describe("CatalogSnapshot", () => {
   });
 
   it("lists distinct platforms and service names", () => {
-    expect(snap.platforms()).toEqual(["googlemaps", "linkedin", "reddit", "youtube"]);
+    expect(snap.platforms()).toEqual([
+      "googlemaps",
+      "linkedin",
+      "person",
+      "reddit",
+      "youtube",
+    ]);
     expect(snap.names()).toContain("place.search");
   });
 });
@@ -139,6 +148,28 @@ describe("CatalogCache", () => {
     await cache.get();
     await cache.get();
     expect(count()).toBe(1);
+  });
+
+  it("coalesces concurrent cold reads into a single fetch", async () => {
+    // Every tool call reads the cache. On a cold start the agent can fire
+    // several at once, and without the in-flight promise each one would open
+    // its own catalogue request.
+    const count = stubFetch([okResponse]);
+    const cache = new CatalogCache("https://api.test");
+    const [a, b, c] = await Promise.all([cache.get(), cache.get(), cache.get()]);
+    expect(count()).toBe(1);
+    expect(a).toBe(b);
+    expect(b).toBe(c);
+  });
+
+  it("retries after a failed refresh instead of latching onto it", async () => {
+    // The in-flight promise is cleared in a finally, so a failure must not
+    // pin the cache to a permanently rejected fetch.
+    const count = stubFetch([failResponse, okResponse]);
+    const cache = new CatalogCache("https://api.test");
+    expect(await cache.get()).toBeNull();
+    expect(await cache.get()).not.toBeNull();
+    expect(count()).toBe(2);
   });
 
   it("refreshes after the TTL and serves stale on failure", async () => {

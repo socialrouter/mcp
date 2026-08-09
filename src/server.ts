@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { SocialRouter, Extraction, Platform } from "@socialrouter/sdk";
+import type { SocialRouter, Extraction, InputKind, Subject } from "@socialrouter/sdk";
 import { checkService, type CatalogCache, type CatalogSnapshot } from "./catalog.js";
 
 export interface ToolResult {
@@ -58,9 +58,24 @@ interface RunArgs {
 type AnyRunInput = {
   urls?: string[];
   queries?: string[];
+  identifiers?: string[];
   provider?: `${string}/${string}`;
   limit?: number;
   options?: Record<string, unknown>;
+};
+
+/**
+ * Which body field carries the inputs, per the service's declared kind.
+ *
+ * Exhaustive over `InputKind` rather than an `=== "query" ? … : …` ternary:
+ * that shape silently sent an enrichment service's identifiers as `urls`,
+ * which the API rejects with a corrective 400 the agent then has to guess
+ * its way out of.
+ */
+const INPUT_BODY: Record<InputKind, (inputs: string[]) => AnyRunInput> = {
+  url: (inputs) => ({ urls: inputs }),
+  query: (inputs) => ({ queries: inputs }),
+  identifier: (inputs) => ({ identifiers: inputs }),
 };
 
 /**
@@ -99,19 +114,19 @@ export function buildServer(
     {
       title: "List available services",
       description:
-        "List every service you can call: one row per '<platform>/<service>' with the exact input it expects — 'input_kind' says whether it takes URLs or free-text queries, and 'accepts' lists every valid shape with a 'format' and a concrete 'example' (the API rejects inputs matching none of them). Each row also carries 'options' (the typed parameters that service accepts) and 'offers' (the implementations behind it, in failover order, cheapest first, each with its price per record and batch cap). Use the 'service' value with the run tool. Filter with 'platform' and/or 'service' to keep the output small.",
+        "List every service you can call: one row per '<subject>/<service>' — the subject is a platform (linkedin, reddit…) for scraping, or an entity ('person', 'company') for enrichment, which answers about the entity itself rather than about one of its pages. 'input_kind' says what the service consumes (URLs, free-text queries, or identifiers — an email, a domain, a profile URL, any handle you hold), and 'accepts' lists every valid shape with a 'format' and a concrete 'example' (the API rejects inputs matching none of them). Each row also carries 'options' (the typed parameters that service accepts) and 'offers' (the implementations behind it, in failover order, cheapest first, each with its price per record and batch cap). Use the 'service' value with the run tool. Filter with 'platform' and/or 'service' to keep the output small.",
       inputSchema: {
         platform: z
-          .enum(platforms as [Platform, ...Platform[]])
+          .enum(platforms as [Subject, ...Subject[]])
           .optional()
-          .describe("Filter by platform."),
+          .describe("Filter by platform, or by enrichment entity ('person', 'company')."),
         service: z
           .enum(names as [string, ...string[]])
           .optional()
           .describe("Filter by service name (e.g. 'profile.info')."),
       },
     },
-    async ({ platform, service }: { platform?: Platform; service?: string }) =>
+    async ({ platform, service }: { platform?: Subject; service?: string }) =>
       ok((await snap()).services({ platform, service })),
   );
 
@@ -120,7 +135,7 @@ export function buildServer(
     {
       title: "Run a SocialRouter service",
       description:
-        `Fetch social data by running one service. 'service' is a '<platform>/<service>' slug — pick one from list_services whose platform matches your input and whose name matches the data you want (e.g. a LinkedIn profile URL + 'linkedin/profile.info'). 'inputs' are URLs for a url-kind service and free-text queries for a query-kind one; list_services says which, and documents the accepted URL shapes with concrete examples. Never guess or reconstruct a URL: pass it exactly as the user provided it, or check list_services first — the API rejects a non-matching URL before any credits are spent. All inputs in one call must belong to the service's platform. By default the router picks the offer and falls over to the next one on failure; the response's 'served_by' says which offer answered. Platforms: ${platforms.join(", ")}.`,
+        `Fetch social data by running one service. 'service' is a '<subject>/<service>' slug — pick one from list_services whose subject matches your input and whose name matches the data you want (e.g. a LinkedIn profile URL + 'linkedin/profile.info', or an email + 'person/info'). 'inputs' are URLs for a url-kind service, free-text queries for a query-kind one, and identifiers (email, domain, profile URL, provider id) for an identifier-kind one; list_services says which, and documents the accepted shapes with concrete examples. Never guess or reconstruct a URL: pass it exactly as the user provided it, or check list_services first — the API rejects a non-matching input before any credits are spent. All inputs in one call must belong to the service's subject. By default the router picks the offer and falls over to the next one on failure; the response's 'served_by' says which offer answered. Subjects: ${platforms.join(", ")}.`,
       inputSchema: {
         service: slugSchema(startup.slugs()).describe(
           "Service slug from list_services (e.g. 'reddit/subreddit.posts').",
@@ -129,7 +144,7 @@ export function buildServer(
           .array(z.string())
           .nonempty()
           .describe(
-            "URLs (url-kind services) or search queries (query-kind services), all for the service's platform. Pass URLs verbatim — do not guess their shape.",
+            "URLs (url-kind services), search queries (query-kind services), or identifiers such as an email or a domain (identifier-kind services), all for the service's subject. Pass URLs verbatim — do not guess their shape.",
           ),
         provider: z
           .string()
@@ -159,7 +174,7 @@ export function buildServer(
       const check = checkService(await snap(), service, inputs.length, args.provider);
       if (!("row" in check)) return err(check.error);
       const result = await runService(service, {
-        ...(check.row.input_kind === "query" ? { queries: inputs } : { urls: inputs }),
+        ...INPUT_BODY[check.row.input_kind](inputs),
         ...(args.provider ? { provider: args.provider as `${string}/${string}` } : {}),
         ...(args.limit !== undefined ? { limit: args.limit } : {}),
         ...(args.options ? { options: args.options } : {}),

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { SocialRouter } from "@socialrouter/sdk";
+import * as sdk from "@socialrouter/sdk";
 import { CatalogCache } from "../src/catalog.js";
 import { buildServer, UNTRUSTED_NOTICE } from "../src/server.js";
 import { makeSnapshot, RAW_CATALOG } from "./fixtures.js";
@@ -63,13 +64,19 @@ function stubFetch(routes: Record<string, unknown> = {}) {
   });
 }
 
-/** Everything the run tool touches, wired the way index.ts wires it. */
-async function connect() {
+/**
+ * Everything the run tool touches, wired the way index.ts wires it.
+ *
+ * `startup` defaults to the full fixture. Passing a narrower one models a
+ * server that booted before the catalogue grew — the tool schemas are frozen
+ * at registration while the cache keeps refreshing.
+ */
+async function connect(startup = makeSnapshot()) {
   const client = new Client({ name: "test", version: "0" });
   const server = buildServer(
     new SocialRouter({ apiKey: "sr_test_key", baseUrl: BASE, client: "mcp" }),
     new CatalogCache(BASE),
-    makeSnapshot(),
+    startup,
     "test",
   );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -140,6 +147,54 @@ describe("MCP server wiring", () => {
 
     const post = calls.find((c) => c.method === "POST")!;
     expect(post.body).toEqual({ queries: ["best pizza in Brooklyn"] });
+  });
+
+  /*
+   * The two halves of dispatching an enrichment service, and both used to be
+   * wrong: the body field came from a `kind === "query" ? … : …` ternary that
+   * sent identifiers as `urls`, and the SDK built every path as
+   * `/v1/extract/...`. Either one alone turns a valid call into a 4xx the
+   * agent then has to guess its way out of.
+   *
+   * Gated on the SDK release that carries the fix. This package resolves
+   * `@socialrouter/sdk` from npm, not from the sibling folder, so until the
+   * new version is published the SDK here still hardcodes `/v1/extract/` and
+   * these would fail for a reason that is not the code under test. The probe
+   * is a capability check rather than a version range: it flips on its own
+   * the moment the dependency is updated, so nobody has to remember to
+   * un-skip anything.
+   */
+  const sdkKnowsNamespaces = "SERVICE_NAMESPACE" in sdk;
+
+  it.skipIf(!sdkKnowsNamespaces)("sends identifiers to the enrich namespace, not urls to extract", async () => {
+    stubFetch({ "/v1/enrich/person/info": EXTRACTION });
+    const result = await (await connect()).callTool({
+      name: "run",
+      arguments: { service: "person/info", inputs: ["ada@analytical.dev"] },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const post = calls.find((c) => c.method === "POST")!;
+    expect(post.url).toBe("/v1/enrich/person/info");
+    expect(post.body).toEqual({ identifiers: ["ada@analytical.dev"] });
+  });
+
+  it.skipIf(!sdkKnowsNamespaces)("keeps a mixed batch of identifier shapes in one call", async () => {
+    // An email and a LinkedIn URL address the same kind of entity; the point
+    // of the identifier kind is that they travel together.
+    stubFetch({ "/v1/enrich/person/info": EXTRACTION });
+    await (await connect()).callTool({
+      name: "run",
+      arguments: {
+        service: "person/info",
+        inputs: ["ada@analytical.dev", "https://www.linkedin.com/in/amili"],
+      },
+    });
+
+    const post = calls.find((c) => c.method === "POST")!;
+    expect(post.body).toEqual({
+      identifiers: ["ada@analytical.dev", "https://www.linkedin.com/in/amili"],
+    });
   });
 
   it("forwards provider, limit and options untouched", async () => {
@@ -232,6 +287,90 @@ describe("MCP server wiring", () => {
       usage: { period: "7d" },
     });
     expect(calls.some((c) => c.url === "/v1/account/usage?days=7")).toBe(true);
+  });
+
+  it("rejects an unknown offer before spending a request", async () => {
+    stubFetch();
+    const result = await (await connect()).callTool({
+      name: "run",
+      arguments: {
+        service: "reddit/subreddit.posts",
+        inputs: ["https://www.reddit.com/r/programming"],
+        provider: "brightdata/reddit",
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0].text).toContain("does not serve");
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  /*
+   * An unknown slug never reaches checkService: the tool's `service` field is
+   * a zod enum of the startup slugs, so the schema rejects it first and the
+   * hand-written "Unknown service … Available: …" message in catalog.ts is
+   * unreachable from here (it still serves the empty-catalogue fallback,
+   * where slugSchema degrades to z.string()). The agent is not left guessing
+   * either way — the schema error enumerates the valid slugs — so this pins
+   * which of the two paths actually answers.
+   */
+  it("names the valid slugs when the agent invents one", async () => {
+    stubFetch();
+    const result = await (await connect()).callTool({
+      name: "run",
+      arguments: { service: "reddit/nope", inputs: ["https://www.reddit.com/r/x"] },
+    });
+
+    expect(result.isError).toBe(true);
+    const text = (result.content as { text: string }[])[0].text;
+    expect(text).toContain("reddit/subreddit.posts");
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  /*
+   * The slug and platform enums are built from the startup snapshot and
+   * frozen at registerTool time, while `snap()` re-reads the cache on every
+   * call. A service that appears in the catalogue after boot is therefore
+   * rejected by the schema before the handler — the MCP has to be restarted
+   * to see it. That is the current contract; this pins it so the day it
+   * changes is a deliberate one.
+   */
+  it("refuses a service that was absent from the catalogue at startup", async () => {
+    stubFetch({ "/v1/extract/googlemaps/place.search": EXTRACTION });
+    const bootedOnReddit = makeSnapshot(RAW_CATALOG.filter((s) => s.platform === "reddit"));
+
+    const result = await (await connect(bootedOnReddit)).callTool({
+      name: "run",
+      arguments: { service: "googlemaps/place.search", inputs: ["best pizza in Brooklyn"] },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  it("get_account fails loudly when one of its two calls fails", async () => {
+    // balance answers, usage does not — Promise.all rejects, and the agent
+    // must be told rather than handed a half-filled object.
+    stubFetch({ "/v1/account/balance": { balance: 9.65, currency: "USD" } });
+    const result = await (await connect()).callTool({
+      name: "get_account",
+      arguments: {},
+    });
+
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0].text).not.toContain("9.65");
+  });
+
+  it("get_account omits the window when the agent does not ask for one", async () => {
+    // `days` is optional on the tool and defaulted by the SDK; sending
+    // `days=undefined` on the wire would make the API parse a bad number.
+    stubFetch({
+      "/v1/account/balance": { balance: 1, currency: "USD" },
+      "/v1/account/usage": { period: "30d" },
+    });
+    await (await connect()).callTool({ name: "get_account", arguments: {} });
+
+    expect(calls.some((c) => c.url === "/v1/account/usage?days=30")).toBe(true);
   });
 
   it("list_services serves the catalogue without touching the run path", async () => {

@@ -92,6 +92,42 @@ export const RAW_CATALOG = [
     ],
   },
   {
+    // An enrichment service: the other namespace, the identifier input kind,
+    // and a BYOK-only offer — the three things a platform-only fixture never
+    // exercises. Its endpoint is under /v1/enrich, which is where the run
+    // tool must send it.
+    platform: "person",
+    service: "info",
+    endpoint: "/v1/enrich/person/info",
+    input_kind: "identifier",
+    input_field: "identifiers",
+    accepts: [
+      { format: "<email>", example: "ada@analytical.dev" },
+      {
+        format: "https://www.linkedin.com/in/<handle>",
+        example: "https://www.linkedin.com/in/amili",
+        pattern: "linkedin\\.com\\/in\\/[^\\/?#]+",
+      },
+    ],
+    options: [
+      {
+        name: "enrich",
+        type: "boolean",
+        default: true,
+        description: "Resolve each hit into a full profile.",
+      },
+    ],
+    offers: [
+      {
+        offer: "apollo/person",
+        source: "apollo",
+        price_per_record: 0,
+        max_inputs: 10,
+        requires_own_key: true,
+      },
+    ],
+  },
+  {
     // Declared but served by nobody: must never surface as callable.
     platform: "instagram",
     service: "profile.info",
