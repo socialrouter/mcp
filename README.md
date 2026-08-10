@@ -6,9 +6,35 @@ Supported platforms include LinkedIn, Instagram, X, Reddit, Facebook, TikTok, Yo
 
 ## Configuration
 
-Get an API key at [socialrouter.io](https://socialrouter.io), then add the server to your MCP client config.
+Get an API key at [socialrouter.io](https://socialrouter.io), then wire the
+server into your client. Step-by-step guides, with the config paths and the
+verification step for each host:
 
-### Claude Desktop / Claude Code
+| Client | Guide |
+| --- | --- |
+| Claude Code | [docs.socialrouter.io/mcp/claude-code](https://docs.socialrouter.io/mcp/claude-code) |
+| Claude Desktop | [docs.socialrouter.io/mcp/claude-desktop](https://docs.socialrouter.io/mcp/claude-desktop) |
+| Cursor | [docs.socialrouter.io/mcp/cursor](https://docs.socialrouter.io/mcp/cursor) |
+| Codex CLI | [docs.socialrouter.io/mcp/codex](https://docs.socialrouter.io/mcp/codex) |
+| VS Code | [docs.socialrouter.io/mcp/vscode](https://docs.socialrouter.io/mcp/vscode) |
+| Gemini CLI | [docs.socialrouter.io/mcp/gemini-cli](https://docs.socialrouter.io/mcp/gemini-cli) |
+| Anything else | [docs.socialrouter.io/mcp/other-clients](https://docs.socialrouter.io/mcp/other-clients) |
+
+### Claude Code
+
+```bash
+claude mcp add socialrouter --scope user \
+  --env SOCIALROUTER_API_KEY=sr_live_xxxxxxxxxxxxx \
+  -- npx -y @socialrouter/mcp
+```
+
+### Claude Desktop
+
+Open the **Claude** menu in the system menu bar → **Settings…** → **Developer**
+→ **Edit Config**. That opens (or creates) `claude_desktop_config.json`:
+
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
 {
@@ -24,9 +50,13 @@ Get an API key at [socialrouter.io](https://socialrouter.io), then add the serve
 }
 ```
 
+Quit Claude Desktop completely and reopen it, then check the **+** button in the
+chat box → **Connectors** → **Manage connectors**.
+
 ### Cursor
 
-Add to `~/.cursor/mcp.json` with the same shape.
+Add the same `mcpServers` block to `~/.cursor/mcp.json` (or `.cursor/mcp.json`
+in a project), then enable the server from Cursor's MCP settings.
 
 ## How it works
 
