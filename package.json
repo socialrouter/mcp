@@ -3,6 +3,7 @@
   "version": "0.9.0",
   "description": "MCP server for SocialRouter, let LLM agents extract social media data",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "type": "module",
   "bin": {
     "socialrouter-mcp": "dist/index.js"

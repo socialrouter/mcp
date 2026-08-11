@@ -5,6 +5,9 @@
     "moduleResolution": "bundler",
     "outDir": "dist",
     "rootDir": "src",
+    // The package ships its dist to other TypeScript code (the remote server
+    // in /mcp imports it), which needs the declarations alongside the JS.
+    "declaration": true,
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
