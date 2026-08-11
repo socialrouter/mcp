@@ -4,7 +4,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { SocialRouter } from "@socialrouter/sdk";
 import * as sdk from "@socialrouter/sdk";
 import { CatalogCache } from "../src/catalog.js";
-import { buildServer, UNTRUSTED_NOTICE } from "../src/server.js";
+import { buildServer, DASHBOARD_KEYS_URL, UNTRUSTED_NOTICE } from "../src/server.js";
 import { makeSnapshot, RAW_CATALOG } from "./fixtures.js";
 
 /**
@@ -90,6 +90,31 @@ async function connect(startup = makeSnapshot()) {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   return client;
+}
+
+/**
+ * The catalogue still serves (it is public), but every authenticated call
+ * comes back 401 — a revoked key, exactly as the API words it.
+ */
+function stub401() {
+  vi.stubGlobal("fetch", (url: string) => {
+    const path = url.replace(BASE, "");
+    if (path === "/v1/services") {
+      return Promise.resolve(new Response(JSON.stringify({ data: RAW_CATALOG }), { status: 200 }));
+    }
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "invalid_api_key",
+            message: "The API key provided is invalid or has been revoked.",
+            type: "auth",
+          },
+        }),
+        { status: 401 },
+      ),
+    );
+  });
 }
 
 /** The run tool's JSON payload, minus the untrusted-content notice. */
@@ -265,6 +290,42 @@ describe("MCP server wiring", () => {
     // A wiring bug reads off undefined; a real API error names the failure.
     expect(text).not.toContain("Cannot read properties of undefined");
     expect(text).toContain("no stub for /v1/extract/reddit/subreddit.posts");
+  });
+
+  /*
+   * A rejected key is the one failure the agent cannot route around, and the
+   * fix lives in a browser it cannot open. The tool error has to name the
+   * dashboard, or the agent retries the call and the user never learns why
+   * every SocialRouter tool is failing.
+   */
+  it("tells the user to create a key when the API rejects theirs", async () => {
+    stub401();
+    const result = await (await connect()).callTool({
+      name: "run",
+      arguments: {
+        service: "reddit/subreddit.posts",
+        inputs: ["https://www.reddit.com/r/programming"],
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    const text = (result.content as { text: string }[])[0].text;
+    expect(text).toContain("invalid or has been revoked");
+    expect(text).toContain(DASHBOARD_KEYS_URL);
+    expect(text).toContain("SOCIALROUTER_API_KEY");
+  });
+
+  it("carries the same guidance on the account and extraction tools", async () => {
+    for (const call of [
+      { name: "get_account", arguments: {} },
+      { name: "get_extraction", arguments: { id: "ext_123" } },
+    ]) {
+      stub401();
+      const result = await (await connect()).callTool(call);
+      expect(result.isError).toBe(true);
+      expect((result.content as { text: string }[])[0].text).toContain(DASHBOARD_KEYS_URL);
+      vi.unstubAllGlobals();
+    }
   });
 
   it("get_extraction fetches by id and marks the result untrusted", async () => {

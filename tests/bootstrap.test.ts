@@ -45,6 +45,10 @@ describe("bootstrap", () => {
     await expect(bootstrap({}, ENTRY_URL)).rejects.toThrow(
       "SOCIALROUTER_API_KEY environment variable is required",
     );
+    // …and says where to get one: stderr is all the user sees of a stdio server.
+    await expect(bootstrap({}, ENTRY_URL)).rejects.toThrow(
+      "https://www.socialrouter.io/dashboard/keys",
+    );
     // The key is checked before anything is spent or reached for.
     expect(urls).toEqual([]);
   });

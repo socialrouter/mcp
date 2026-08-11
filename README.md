@@ -126,6 +126,8 @@ being served.
 | `SOCIALROUTER_API_KEY` | yes | — |
 | `SOCIALROUTER_BASE_URL` | no | `https://api.socialrouter.io` |
 
+Create a key at [socialrouter.io/dashboard/keys](https://www.socialrouter.io/dashboard/keys). If the key is missing, invalid or revoked, the server says so and points there — at startup on stderr, and in the tool result if the key is rejected while running.
+
 ## License
 
 MIT

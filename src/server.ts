@@ -1,7 +1,28 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { AuthenticationError } from "@socialrouter/sdk";
 import type { SocialRouter, Extraction, InputKind, Subject } from "@socialrouter/sdk";
 import { checkService, type CatalogCache, type CatalogSnapshot } from "./catalog.js";
+
+/** Where the user creates a key. Spelled out here rather than imported so the
+ * message survives an older SDK on the host's machine. */
+export const DASHBOARD_KEYS_URL = "https://www.socialrouter.io/dashboard/keys";
+
+/**
+ * What the agent should say when the key is rejected.
+ *
+ * A 401 is the one failure the agent cannot work around: no other service, no
+ * retry and no rephrasing gets past it, and the fix is in a browser the agent
+ * cannot reach. Left unhandled the SDK's throw reaches the host as an opaque
+ * internal error, and the agent tends to retry it. Naming the next step —
+ * open the dashboard, create a key, put it in SOCIALROUTER_API_KEY — turns a
+ * dead end into an instruction the user can act on.
+ */
+export const AUTH_GUIDANCE =
+  `Stop and tell the user: their SocialRouter API key is missing, invalid or revoked, ` +
+  `so no SocialRouter tool will work until it is replaced. They need to create a new key at ` +
+  `${DASHBOARD_KEYS_URL}, set it as SOCIALROUTER_API_KEY in this MCP server's configuration, ` +
+  `and restart the MCP server. Do not retry this tool before that is done.`;
 
 export interface ToolResult {
   [key: string]: unknown;
@@ -37,6 +58,20 @@ function okUntrusted(data: unknown): ToolResult {
       { type: "text", text: JSON.stringify(data, null, 2) },
     ],
   };
+}
+
+/**
+ * Run a tool body, turning a rejected key into a tool error that says what to
+ * do about it. Everything else keeps throwing — the host renders those, and
+ * they are failures a retry or a different call can actually address.
+ */
+async function withAuthGuidance(run: () => Promise<ToolResult>): Promise<ToolResult> {
+  try {
+    return await run();
+  } catch (e) {
+    if (e instanceof AuthenticationError) return err(`${e.message}\n\n${AUTH_GUIDANCE}`);
+    throw e;
+  }
 }
 
 /** Enum of the service slugs live at startup; free string if none yet. */
@@ -127,7 +162,7 @@ export function buildServer(
       },
     },
     async ({ platform, service }: { platform?: Subject; service?: string }) =>
-      ok((await snap()).services({ platform, service })),
+      withAuthGuidance(async () => ok((await snap()).services({ platform, service }))),
   );
 
   server.registerTool(
@@ -170,18 +205,19 @@ export function buildServer(
       service,
       inputs,
       ...args
-    }: { service: string; inputs: string[] } & RunArgs) => {
-      const check = checkService(await snap(), service, inputs.length, args.provider);
-      if (!("row" in check)) return err(check.error);
-      const result = await runService(service, {
-        ...INPUT_BODY[check.row.input_kind](inputs),
-        ...(args.provider ? { provider: args.provider as `${string}/${string}` } : {}),
-        ...(args.limit !== undefined ? { limit: args.limit } : {}),
-        ...(args.options ? { options: args.options } : {}),
-      });
-      // Result records hold scraped third-party text — mark it untrusted.
-      return okUntrusted(result);
-    },
+    }: { service: string; inputs: string[] } & RunArgs) =>
+      withAuthGuidance(async () => {
+        const check = checkService(await snap(), service, inputs.length, args.provider);
+        if (!("row" in check)) return err(check.error);
+        const result = await runService(service, {
+          ...INPUT_BODY[check.row.input_kind](inputs),
+          ...(args.provider ? { provider: args.provider as `${string}/${string}` } : {}),
+          ...(args.limit !== undefined ? { limit: args.limit } : {}),
+          ...(args.options ? { options: args.options } : {}),
+        });
+        // Result records hold scraped third-party text — mark it untrusted.
+        return okUntrusted(result);
+      }),
   );
 
   server.registerTool(
@@ -195,7 +231,8 @@ export function buildServer(
       },
     },
     // Fetched records hold scraped third-party text — mark it untrusted.
-    async ({ id }: { id: string }) => okUntrusted(await client.getExtraction(id)),
+    async ({ id }: { id: string }) =>
+      withAuthGuidance(async () => okUntrusted(await client.getExtraction(id))),
   );
 
   server.registerTool(
@@ -213,13 +250,14 @@ export function buildServer(
           .describe("Number of days to summarize (default 30)."),
       },
     },
-    async ({ days }: { days?: number }) => {
-      const [balance, usage] = await Promise.all([
-        client.getBalance(),
-        client.getUsage(days),
-      ]);
-      return ok({ balance, usage });
-    },
+    async ({ days }: { days?: number }) =>
+      withAuthGuidance(async () => {
+        const [balance, usage] = await Promise.all([
+          client.getBalance(),
+          client.getUsage(days),
+        ]);
+        return ok({ balance, usage });
+      }),
   );
 
   return server;

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SocialRouter } from "@socialrouter/sdk";
 import { CatalogCache } from "./catalog.js";
-import { buildServer } from "./server.js";
+import { buildServer, DASHBOARD_KEYS_URL } from "./server.js";
 
 export const DEFAULT_BASE_URL = "https://api.socialrouter.io";
 
@@ -49,7 +49,12 @@ export async function bootstrap(
 ): Promise<McpServer> {
   const apiKey = env.SOCIALROUTER_API_KEY;
   if (!apiKey) {
-    throw new Error("SOCIALROUTER_API_KEY environment variable is required");
+    // Stderr on a stdio server is often all the user ever sees, so it carries
+    // the fix as well as the diagnosis.
+    throw new Error(
+      "SOCIALROUTER_API_KEY environment variable is required. " +
+        `Create an API key at ${DASHBOARD_KEYS_URL} and set it in this MCP server's configuration.`,
+    );
   }
 
   const baseUrl = resolveBaseUrl(env);
