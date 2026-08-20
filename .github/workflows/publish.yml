@@ -1,0 +1,52 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+
+    permissions:
+      # Required for npm Trusted Publishing (OIDC) and provenance attestations.
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+
+      # Trusted Publishing requires npm >= 11.5.1.
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check tag matches package.json version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $pkg" >&2
+            exit 1
+          fi
+
+      # Builds, then the hermetic unit suite.
+      - name: Test
+        run: npm test
+
+      # Drift detector against the live catalogue. Public endpoint, no key.
+      - name: Contract tests
+        run: npm run test:contract
+
+      - name: Publish
+        run: npm publish --provenance --access public
