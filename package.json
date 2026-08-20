@@ -1,6 +1,6 @@
 {
   "name": "@socialrouter/mcp",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "description": "MCP server for SocialRouter, let LLM agents extract social media data",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
