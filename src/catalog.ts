@@ -38,6 +38,10 @@ export interface ServiceOption {
   format?: string;
   description: string;
   default?: string | number | boolean;
+  /** The call fails without it — linkedin/job.search scopes to a `location`. */
+  required?: boolean;
+  /** A concrete value, for options whose shape a type name does not convey. */
+  example?: string;
 }
 
 /** One offer of a service: a source's concrete implementation of it. */

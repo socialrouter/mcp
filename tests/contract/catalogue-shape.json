@@ -44,8 +44,10 @@
     ],
     "sometimes": [
       "default",
+      "example",
       "format",
       "offers",
+      "required",
       "values"
     ]
   },
