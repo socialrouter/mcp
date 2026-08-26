@@ -113,7 +113,7 @@ export const RAW_CATALOG = [
     // tool must send it.
     platform: "person",
     service: "info",
-    endpoint: "/v1/enrich/person/info",
+    endpoint: "/v1/enrich/person",
     input_kind: "identifier",
     input_field: "identifiers",
     accepts: [

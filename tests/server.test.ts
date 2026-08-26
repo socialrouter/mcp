@@ -200,7 +200,7 @@ describe("MCP server wiring", () => {
   const sdkKnowsNamespaces = "SERVICE_NAMESPACE" in sdk;
 
   it.skipIf(!sdkKnowsNamespaces)("sends identifiers to the enrich namespace, not urls to extract", async () => {
-    stubFetch({ "/v1/enrich/person/info": EXTRACTION });
+    stubFetch({ "/v1/enrich/person": EXTRACTION });
     const result = await (await connect()).callTool({
       name: "run",
       arguments: { service: "person/info", inputs: ["ada@analytical.dev"] },
@@ -208,14 +208,14 @@ describe("MCP server wiring", () => {
 
     expect(result.isError).toBeFalsy();
     const post = calls.find((c) => c.method === "POST")!;
-    expect(post.url).toBe("/v1/enrich/person/info");
+    expect(post.url).toBe("/v1/enrich/person");
     expect(post.body).toEqual({ identifiers: ["ada@analytical.dev"] });
   });
 
   it.skipIf(!sdkKnowsNamespaces)("keeps a mixed batch of identifier shapes in one call", async () => {
     // An email and a LinkedIn URL address the same kind of entity; the point
     // of the identifier kind is that they travel together.
-    stubFetch({ "/v1/enrich/person/info": EXTRACTION });
+    stubFetch({ "/v1/enrich/person": EXTRACTION });
     await (await connect()).callTool({
       name: "run",
       arguments: {
