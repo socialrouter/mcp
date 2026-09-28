@@ -99,7 +99,7 @@ being served.
 | `list_services` | One row per live `<platform>/<service>`: input kind, accepted input shapes with examples, typed options, and the offers behind it (failover order, price per record, batch cap). Filter by `platform` and/or `service`. |
 | `run` | Run a service over one or more inputs (URLs or queries, per the service's input kind). |
 | `get_extraction` | Retrieve a past run by ID. |
-| `get_account` | Credit balance + usage summary (by offer and platform) over the last N days. |
+| `get_account` | Credit balance, usage summary (by offer and platform) over the last N days (max 365), and the billing mode: own provider keys vs SocialRouter credits, per source. Read-only — provider keys are registered in the dashboard or with `socialrouter credentials set`, never through the MCP, so a token never passes through the agent's context. |
 
 ### `run` parameters
 
@@ -109,7 +109,7 @@ being served.
 | `inputs` | Required. URLs (url-kind services) or search queries (query-kind services), all for the service's platform. |
 | `provider` | Optional, advanced. Pin one offer, e.g. `apify/harshmaur`. Disables failover. |
 | `limit` | Optional. Max records to return (default 100, max 250). |
-| `options` | Optional. Typed options declared by the service (see `options` in `list_services`). Unknown keys are rejected with a corrective error. |
+| `options` | Optional, unless the service declares a `required` option (e.g. `location` on `linkedin/job.search`). Typed options declared by the service (see `options` in `list_services`). Unknown keys are rejected with a corrective error. |
 
 ### Typical flow
 
@@ -117,7 +117,9 @@ being served.
    available, in what shape, and at what price.
 2. `run` with `service: "linkedin/profile.info"` and
    `inputs: ["https://www.linkedin.com/in/..."]`.
-3. Read `served_by` in the result to know which offer answered.
+3. Read `served_by` in the result to know which offer answered, and `billed_as` to know who paid.
+
+When the API refuses a call, the tool error carries its message plus the structured fields that fix it (`valid_options`, `allowed_values`, `invalid_inputs`, `did_you_mean`…), the id of a failed run, and on a rate limit how many seconds to wait.
 
 ## Environment Variables
 

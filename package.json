@@ -53,7 +53,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@socialrouter/sdk": "^0.7.5",
+    "@socialrouter/sdk": "^0.8.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

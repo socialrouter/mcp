@@ -417,6 +417,79 @@ describe("MCP server wiring", () => {
     expect(calls.some((c) => c.method === "POST")).toBe(false);
   });
 
+  /*
+   * Any other API failure reaches the agent as a tool error carrying the
+   * API's corrective fields and, for a failed run, its id — not as a thrown
+   * error the host renders as an opaque message.
+   */
+  it("hands the agent the API's corrective detail and the failed run's id", async () => {
+    vi.stubGlobal("fetch", (url: string) => {
+      const path = url.replace(BASE, "");
+      if (path === "/v1/services") {
+        return Promise.resolve(new Response(JSON.stringify({ data: RAW_CATALOG }), { status: 200 }));
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "invalid_option",
+              message: 'Option "sort" must be one of: hot, top.',
+              type: "validation",
+              allowed_values: ["hot", "top"],
+            },
+            extraction_id: "ext_failed",
+          }),
+          { status: 400 },
+        ),
+      );
+    });
+    const result = await (await connect()).callTool({
+      name: "run",
+      arguments: {
+        service: "reddit/subreddit.posts",
+        inputs: ["https://www.reddit.com/r/programming"],
+        options: { sort: "best" },
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    const text = (result.content as { text: string }[])[0].text;
+    expect(text).toContain('must be one of: hot, top');
+    expect(text).toContain('"allowed_values"');
+    expect(text).toContain('"extraction_id": "ext_failed"');
+  });
+
+  it("tells the agent how long to wait on a rate limit", async () => {
+    vi.stubGlobal("fetch", (url: string) => {
+      const path = url.replace(BASE, "");
+      if (path === "/v1/services") {
+        return Promise.resolve(new Response(JSON.stringify({ data: RAW_CATALOG }), { status: 200 }));
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ error: { code: "rate_limited", message: "Too many requests.", type: "rate_limit" } }),
+          { status: 429, headers: { "Retry-After": "30" } },
+        ),
+      );
+    });
+    const result = await (await connect()).callTool({ name: "get_account", arguments: {} });
+    expect(result.isError).toBe(true);
+    expect((result.content as { text: string }[])[0].text).toContain("wait 30 seconds");
+  });
+
+  it("get_account includes the billing mode when the API has it", async () => {
+    stubFetch({
+      "/v1/account/balance": { balance: 1, currency: "USD" },
+      "/v1/account/usage": { period: "30d" },
+      "/v1/account/byok-mode": { byok_mode: "own_first", source_modes: {}, byok_only_sources: ["apollo"] },
+    });
+    const result = await (await connect()).callTool({ name: "get_account", arguments: {} });
+    expect(result.isError).toBeFalsy();
+    expect(payload(result as never)).toMatchObject({
+      billing: { byok_mode: "own_first", byok_only_sources: ["apollo"] },
+    });
+  });
+
   it("get_account fails loudly when one of its two calls fails", async () => {
     // balance answers, usage does not — Promise.all rejects, and the agent
     // must be told rather than handed a half-filled object.

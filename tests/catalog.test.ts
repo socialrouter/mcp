@@ -29,6 +29,23 @@ describe("CatalogSnapshot", () => {
     expect(row?.price_from).toBe(0.001725);
   });
 
+  it("does not advertise an own-key offer's 0 as a price", () => {
+    // person/info is served only by apollo/person, which runs on the user's
+    // own key: 0 there means "not billed by us", and every other row's
+    // price_from is a credit price — so is this one, and there is none.
+    expect(snap.find("person/info")?.price_from).toBe(0);
+    const mixed = makeSnapshot([
+      {
+        ...RAW_CATALOG.find((s) => s.platform === "person")!,
+        offers: [
+          { offer: "apollo/person", source: "apollo", price_per_record: 0, max_inputs: 10, requires_own_key: true },
+          { offer: "apify/x", source: "apify", price_per_record: 0.01, max_inputs: 10, requires_own_key: false },
+        ],
+      },
+    ]);
+    expect(mixed.find("person/info")?.price_from).toBe(0.01);
+  });
+
   it("sorts rows by subject then service name, both namespaces in one list", () => {
     // Flat across namespaces on purpose: this listing is where an agent
     // discovers that person/info exists at all.

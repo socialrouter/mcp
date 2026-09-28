@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { AuthenticationError } from "@socialrouter/sdk";
+import { AuthenticationError, RateLimitError, SocialRouterError } from "@socialrouter/sdk";
 import type { SocialRouter, Extraction, InputKind, Subject } from "@socialrouter/sdk";
 import { checkService, type CatalogCache, type CatalogSnapshot } from "./catalog.js";
 
@@ -61,15 +61,40 @@ function okUntrusted(data: unknown): ToolResult {
 }
 
 /**
- * Run a tool body, turning a rejected key into a tool error that says what to
- * do about it. Everything else keeps throwing — the host renders those, and
- * they are failures a retry or a different call can actually address.
+ * An API failure as the agent should read it: the API's message, then the
+ * structured fields that make it correctable.
+ *
+ * The API writes its 4xx for an agent to fix its own call — the valid option
+ * names, the inputs that failed, the offers that would accept them — and the
+ * SDK carries all of it on `detail`. Left to throw, only the message reached
+ * the host, and a failed run lost its id, the one handle on it.
+ */
+export function describeApiError(e: SocialRouterError): string {
+  const { code, message, type, ...extra } = e.detail;
+  const facts: Record<string, unknown> = { status: e.status, code, type, ...extra };
+  if (e.extractionId) facts.extraction_id = e.extractionId;
+  let guidance = "";
+  if (e instanceof RateLimitError) {
+    guidance =
+      e.retryAfter !== undefined
+        ? `\n\nRate limited: wait ${e.retryAfter} seconds before calling again.`
+        : "\n\nThis limit does not clear by waiting (a credit limit on the API key): tell the user instead of retrying.";
+  }
+  return `${message}${guidance}\n\n${JSON.stringify(facts, null, 2)}`;
+}
+
+/**
+ * Run a tool body, turning an API failure into a tool error the agent can act
+ * on: a rejected key names the dashboard, anything else carries the API's
+ * corrective detail. Errors that are not the API's keep throwing — the host
+ * renders those.
  */
 async function withAuthGuidance(run: () => Promise<ToolResult>): Promise<ToolResult> {
   try {
     return await run();
   } catch (e) {
     if (e instanceof AuthenticationError) return err(`${e.message}\n\n${AUTH_GUIDANCE}`);
+    if (e instanceof SocialRouterError) return err(describeApiError(e));
     throw e;
   }
 }
@@ -197,7 +222,7 @@ export function buildServer(
           .record(z.string(), z.unknown())
           .optional()
           .describe(
-            "Typed options declared by the service — see 'options' in list_services for the exact names, types and allowed values (e.g. {\"sort\": \"top\"} on reddit/subreddit.posts). Unknown keys are rejected with a corrective error, not ignored.",
+            "Typed options declared by the service — see 'options' in list_services for the exact names, types and allowed values (e.g. {\"sort\": \"top\"} on reddit/subreddit.posts). An option marked 'required' must be set (e.g. 'location' on linkedin/job.search). An option listing 'offers' is only honoured by those offers. Unknown keys are rejected with a corrective error, not ignored.",
           ),
       },
     },
@@ -240,14 +265,15 @@ export function buildServer(
     {
       title: "Get account balance and usage",
       description:
-        "Get your SocialRouter credit balance and a usage summary over the last N days, broken down by offer and platform.",
+        "Get your SocialRouter credit balance, a usage summary over the last N days broken down by offer and platform, and the billing mode: whether runs are placed on the user's own provider keys or on SocialRouter credits ('byok_mode', per-source 'source_modes'), and which sources can only run on the user's own key ('byok_only_sources' — offers with 'requires_own_key' in list_services). A run's 'billed_as' says which account paid. Provider keys and the billing mode are managed by the user in the dashboard or the CLI, not from here.",
       inputSchema: {
         days: z
           .number()
           .int()
           .positive()
+          .max(365)
           .optional()
-          .describe("Number of days to summarize (default 30)."),
+          .describe("Number of days to summarize (default 30, max 365)."),
       },
     },
     async ({ days }: { days?: number }) =>
@@ -256,7 +282,11 @@ export function buildServer(
           client.getBalance(),
           client.getUsage(days),
         ]);
-        return ok({ balance, usage });
+        // Context, not the answer: balance and usage are what was asked for,
+        // so a billing-mode lookup that fails leaves the field out rather
+        // than failing the tool.
+        const billing = await client.getByokMode().catch(() => undefined);
+        return ok({ balance, usage, ...(billing ? { billing } : {}) });
       }),
   );
 

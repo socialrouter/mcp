@@ -28,6 +28,8 @@ export interface InputFormat {
   /** Validation regex source — informational; the API validates, not us. */
   pattern?: string;
   note?: string;
+  /** Offers that accept this shape. Absent means every offer does. */
+  offers?: string[];
 }
 
 /** One typed option a service accepts. */
@@ -41,7 +43,9 @@ export interface ServiceOption {
   /** The call fails without it — linkedin/job.search scopes to a `location`. */
   required?: boolean;
   /** A concrete value, for options whose shape a type name does not convey. */
-  example?: string;
+  example?: string | number | boolean;
+  /** Offers that honour this option. Absent means every offer does. */
+  offers?: string[];
 }
 
 /** One offer of a service: a source's concrete implementation of it. */
@@ -52,6 +56,11 @@ export interface CatalogueOffer {
   price_per_record: number;
   /** Max inputs this offer accepts per request. */
   max_inputs: number;
+  /**
+   * The offer only runs on a provider key the user registered themselves;
+   * its price is then 0, the provider invoices the user directly.
+   */
+  requires_own_key?: boolean;
 }
 
 interface RawService {
@@ -87,10 +96,19 @@ export interface ServiceRow {
   options: ServiceOption[];
   /** Offers in failover order — the head serves unless one is pinned. */
   offers: CatalogueOffer[];
-  /** Cheapest offer price per record. */
+  /**
+   * Cheapest price per record in SocialRouter credits. Offers that run only
+   * on the user's own key are left out: their 0 is not a price, the provider
+   * invoices the user. 0 when every offer is one of those.
+   */
   price_from: number;
   /** Largest batch any offer of this service accepts. */
   max_inputs: number;
+}
+
+function priceFrom(offers: CatalogueOffer[]): number {
+  const paid = offers.filter((o) => !o.requires_own_key);
+  return paid.length ? Math.min(...paid.map((o) => o.price_per_record)) : 0;
 }
 
 export class CatalogSnapshot {
@@ -107,7 +125,7 @@ export class CatalogSnapshot {
         accepts: s.accepts ?? [],
         options: s.options ?? [],
         offers: s.offers,
-        price_from: Math.min(...s.offers.map((o) => o.price_per_record)),
+        price_from: priceFrom(s.offers),
         max_inputs: Math.max(...s.offers.map((o) => o.max_inputs)),
       });
     }
