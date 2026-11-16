@@ -53,3 +53,27 @@ jobs:
 
       - name: Publish
         run: npm publish --provenance --access public
+
+      # Tell the hosted endpoint a new @socialrouter/mcp is on npm. Only after
+      # the publish succeeded. It receives the version just published and the
+      # SDK range this package was built against, so both of its dependencies
+      # move together. The target repository comes from a secret, which keeps
+      # its name masked in these public logs. Guarded on the secrets: a missing
+      # one must not fail a publish that already went out.
+      - name: Trigger the hosted endpoint
+        if: ${{ success() && startsWith(github.ref, 'refs/tags/') }}
+        env:
+          GH_TOKEN: ${{ secrets.DOWNSTREAM_DISPATCH_TOKEN }}
+          TARGET_REPO: ${{ secrets.TARGET_REPO }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ] || [ -z "${TARGET_REPO:-}" ]; then
+            echo "::warning::DOWNSTREAM_DISPATCH_TOKEN or MCP_REMOTE_REPO is not set — hosted endpoint not notified."
+            exit 0
+          fi
+          version="$(node -p "require('./package.json').version")"
+          sdk_range="$(node -p "require('./package.json').dependencies['@socialrouter/sdk']")"
+          gh api "repos/$TARGET_REPO/dispatches" \
+            -f event_type=mcp-published \
+            -f "client_payload[version]=$version" \
+            -f "client_payload[sdk_range]=$sdk_range"
+
