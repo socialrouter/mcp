@@ -21,7 +21,8 @@
       "offer",
       "price_per_record",
       "requires_own_key",
-      "source"
+      "source",
+      "status"
     ],
     "sometimes": []
   },

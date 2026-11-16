@@ -61,6 +61,11 @@ export interface CatalogueOffer {
    * its price is then 0, the provider invoices the user directly.
    */
   requires_own_key?: boolean;
+  /**
+   * Health-check verdict. "red" offers are currently failing and the router
+   * skips them in the failover chain; "ok" otherwise.
+   */
+  status?: "ok" | "red";
 }
 
 interface RawService {
