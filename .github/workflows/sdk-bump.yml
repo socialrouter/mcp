@@ -1,0 +1,113 @@
+name: SDK bump
+
+# Runs when sdk-ts has just published a new @socialrouter/sdk (repository_dispatch
+# `sdk-published`, sent at the end of its publish.yml). Moves the dependency to
+# that version, runs the tests, releases a patch of @socialrouter/mcp and
+# publishes it.
+#
+# Pushes made with GITHUB_TOKEN do not start other workflows, so the tag push
+# alone would never reach publish.yml; this workflow dispatches it on the new
+# tag itself. The publish therefore still runs from publish.yml, the workflow
+# npm Trusted Publishing is configured for.
+
+on:
+  repository_dispatch:
+    types: [sdk-published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "@socialrouter/sdk version to move to (e.g. 0.10.0)"
+        required: true
+
+concurrency:
+  group: sdk-bump
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  bump:
+    name: Bump SDK, release, publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Check the requested version
+        id: version
+        env:
+          DISPATCHED: ${{ github.event.client_payload.version }}
+          MANUAL: ${{ inputs.version }}
+        run: |
+          version="${DISPATCHED:-$MANUAL}"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::'$version' is not a plain x.y.z version." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # The registry can lag a few seconds behind the publish that triggered us.
+      # The caret is rewritten on purpose: on 0.x, ^0.9.0 never matches 0.10.0.
+      - name: Move to the new SDK
+        env:
+          SDK_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if npm install --save "@socialrouter/sdk@^$SDK_VERSION"; then exit 0; fi
+            echo "SDK $SDK_VERSION not on the registry yet (attempt $attempt) — waiting."
+            sleep 20
+          done
+          echo "::error::@socialrouter/sdk@$SDK_VERSION never became installable." >&2
+          exit 1
+
+      - name: Detect changes
+        id: diff
+        run: |
+          if git diff --quiet -- package.json package-lock.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Already on this SDK — nothing to do."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Test
+        if: steps.diff.outputs.changed == 'true'
+        run: npm test
+
+      - name: Commit, tag and push
+        id: release
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          SDK_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "Update SDK to $SDK_VERSION"
+
+          # --ignore-scripts: the suite has just run, no need for preversion to
+          # run it a second time.
+          npm version patch --no-git-tag-version --ignore-scripts
+          version="$(node -p "require('./package.json').version")"
+          git add package.json package-lock.json
+          git commit -m "$version"
+          git tag "v$version"
+          git push origin main "v$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Publish
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: gh workflow run publish.yml --ref "v$VERSION"

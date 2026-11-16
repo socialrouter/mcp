@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - "v*.*.*"
+  # sdk-bump.yml starts this one by hand on the tag it just pushed: a push made
+  # with GITHUB_TOKEN does not trigger workflows.
+  workflow_dispatch:
 
 jobs:
   publish:
